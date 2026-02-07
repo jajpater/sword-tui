@@ -26,7 +26,7 @@ class BibleView(Static):
         title: str = "",
         **kwargs,
     ):
-        super().__init__(**kwargs)
+        super().__init__("", **kwargs)  # Initialize with empty string
         self._segments: List[VerseSegment] = segments or []
         self._title = title
         self._search_query = ""
@@ -45,7 +45,7 @@ class BibleView(Static):
         """
         self._segments = segments
         self._title = title
-        self._render()
+        self._refresh_content()
 
     def set_search_query(self, query: str = "") -> None:
         """Set the search term for highlighting.
@@ -54,7 +54,7 @@ class BibleView(Static):
             query: Search term to highlight
         """
         self._search_query = query
-        self._render()
+        self._refresh_content()
 
     def highlight_verse(self, verse: Optional[int]) -> None:
         """Highlight a specific verse.
@@ -63,7 +63,7 @@ class BibleView(Static):
             verse: Verse number to highlight, or None to clear
         """
         self._highlight_verse = verse
-        self._render()
+        self._refresh_content()
 
     def get_verse_text(self, verse: int) -> str:
         """Get the text of a specific verse.
@@ -89,7 +89,7 @@ class BibleView(Static):
             f"{seg.verse}. {seg.text}" for seg in self._segments
         )
 
-    def _render(self) -> None:
+    def _refresh_content(self) -> None:
         """Render the Bible text with Rich formatting."""
         text = Text()
 

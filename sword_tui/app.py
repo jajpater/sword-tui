@@ -87,7 +87,8 @@ class SwordApp(App):
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
         yield Header()
-        yield VerticalScroll(BibleView(id="bible-view"), id="bible-scroll")
+        with VerticalScroll(id="bible-scroll"):
+            yield BibleView(id="bible-view")
         yield CommandInput(
             commands=["quit", "help", "module", "export", "bookmark", "goto", "search"],
             id="command-input",
