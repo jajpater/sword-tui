@@ -28,7 +28,13 @@ Screen {
 
 BibleView {
     width: 100%;
-    padding: 1 2;
+    height: auto;
+}
+
+VerseRow {
+    width: 100%;
+    height: auto;
+    padding: 0 2;
 }
 
 /* Command input (ex-style) */

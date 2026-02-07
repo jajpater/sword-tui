@@ -5,8 +5,8 @@ from typing import List, Optional
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.widgets import Header, Static
+from textual.containers import VerticalScroll
+from textual.widgets import Header
 
 from sword_tui.backend import DiathekeBackend, get_installed_modules
 from sword_tui.commands import CommandHandler, parse_command
@@ -14,16 +14,13 @@ from sword_tui.data import (
     BOOK_ORDER,
     book_chapters,
     book_index,
-    resolve_alias,
     VerseSegment,
 )
 from sword_tui.widgets import (
     BibleView,
     BookPicker,
     CommandInput,
-    KWICList,
     ModulePicker,
-    ParallelView,
     StatusBar,
 )
 
@@ -35,19 +32,24 @@ class SwordApp(App):
     CSS_PATH = Path(__file__).parent / "styles" / "app.tcss"
 
     BINDINGS = [
-        Binding("q", "quit", "Quit", show=True),
-        Binding("j", "scroll_down", "Down", show=False),
-        Binding("k", "scroll_up", "Up", show=False),
-        Binding("ctrl+d", "page_down", "Page Down", show=False),
-        Binding("ctrl+u", "page_up", "Page Up", show=False),
+        Binding("q", "quit", "Quit", show=False),
+        Binding("j", "next_verse", "Next verse", show=False),
+        Binding("k", "prev_verse", "Prev verse", show=False),
         Binding("g", "goto", "Goto", show=False),
+        Binding("G", "goto_verse", "Goto verse", show=False),
         Binding("m", "module_picker", "Module", show=False),
-        Binding("shift+p", "toggle_parallel", "Parallel", show=False),
+        Binding("v", "visual_mode", "Visual", show=False),
         Binding("y", "yank", "Copy", show=False),
-        Binding("bracketright", "next_chapter", "Next", show=False),
-        Binding("bracketleft", "prev_chapter", "Prev", show=False),
-        Binding("braceright", "next_book", "Next Book", show=False),
-        Binding("braceleft", "prev_book", "Prev Book", show=False),
+        Binding("Y", "yank_chapter", "Copy chapter", show=False),
+        Binding("b", "bookmark", "Bookmark", show=False),
+        Binding("'", "show_bookmarks", "Bookmarks", show=False),
+        Binding("escape", "escape", "Escape", show=False),
+        Binding("right_square_bracket", "next_chapter", "Next chapter", show=False),
+        Binding("left_square_bracket", "prev_chapter", "Prev chapter", show=False),
+        Binding("}", "next_book", "Next book", show=False),
+        Binding("{", "prev_book", "Prev book", show=False),
+        Binding("ctrl+d", "page_down", "Page down", show=False),
+        Binding("ctrl+u", "page_up", "Page up", show=False),
     ]
 
     def __init__(self) -> None:
@@ -57,20 +59,17 @@ class SwordApp(App):
         self._current_book = "Genesis"
         self._current_chapter = 1
         self._current_module = "DutSVV"
-        self._parallel_module = "KJV"
 
         # Mode flags
         self._in_command_mode = False
-        self._in_search_mode = False
-        self._in_parallel_mode = False
+        self._in_visual_mode = False
         self._in_picker_mode = False
 
-        # Digit buffer for numeric input
+        # Digit buffer for numeric input (e.g., "5G" to go to verse 5)
         self._digit_buffer = ""
 
         # Backend
         self._backend = DiathekeBackend(self._current_module)
-        self._parallel_backend = DiathekeBackend(self._parallel_module)
 
         # Command handler (initialized after mount)
         self._command_handler: Optional[CommandHandler] = None
@@ -80,9 +79,6 @@ class SwordApp(App):
         if modules:
             self._current_module = modules[0].name
             self._backend.set_module(self._current_module)
-            if len(modules) > 1:
-                self._parallel_module = modules[1].name
-                self._parallel_backend.set_module(self._parallel_module)
 
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
@@ -90,7 +86,7 @@ class SwordApp(App):
         with VerticalScroll(id="bible-scroll"):
             yield BibleView(id="bible-view")
         yield CommandInput(
-            commands=["quit", "help", "module", "export", "bookmark", "goto", "search"],
+            commands=["quit", "help", "module", "export", "goto"],
             id="command-input",
         )
         yield StatusBar(id="status-bar")
@@ -105,9 +101,6 @@ class SwordApp(App):
         # Load initial content
         self._load_chapter()
 
-        # Update status bar
-        self._update_status()
-
         # Focus the main scroll area
         self.query_one("#bible-scroll").focus()
 
@@ -119,86 +112,58 @@ class SwordApp(App):
         key = event.key
         char = event.character
 
-        # Handle digits for numeric input
+        # Handle digits for numeric input (e.g., "12G" goes to verse 12)
         if char and char.isdigit():
             self._digit_buffer += char
             return
 
-        # Process digit buffer on non-digit key
-        if self._digit_buffer:
-            self._process_digit_buffer()
-
-        # Mode-specific handling
-        if self._in_search_mode:
-            self._handle_search_key(event)
+        # Handle special keys with digit prefix
+        if self._digit_buffer and char == "G":
+            verse = int(self._digit_buffer)
+            self._digit_buffer = ""
+            self._goto_verse(verse)
+            event.stop()
             return
 
-        # Global keys
-        if char == ":":
-            event.stop()
-            self.action_command_mode()
-        elif char == "/":
-            event.stop()
-            self.action_search_mode()
-
-    def _process_digit_buffer(self) -> None:
-        """Process accumulated digit input as chapter number."""
-        if not self._digit_buffer:
-            return
-
-        try:
-            chapter = int(self._digit_buffer)
-            max_chapters = book_chapters(self._current_book)
-            if 1 <= chapter <= max_chapters:
-                self._current_chapter = chapter
-                self._load_chapter()
-        except ValueError:
-            pass
-
+        # Clear digit buffer on other keys
         self._digit_buffer = ""
 
-    def _handle_search_key(self, event) -> None:
-        """Handle keys in search mode."""
-        key = event.key
-        char = event.character
-
-        if key == "escape":
+        # Handle colon and slash for command/search mode
+        if char == ":":
             event.stop()
-            self._close_search_mode()
-        elif key == "enter":
+            self._enter_command_mode()
+        elif char == "/":
             event.stop()
-            self._goto_search_result()
-        elif char == "j" or key == "down":
-            event.stop()
-            self._search_move_down()
-        elif char == "k" or key == "up":
-            event.stop()
-            self._search_move_up()
+            self._enter_search_mode()
 
     # ==================== Actions ====================
 
-    def action_scroll_down(self) -> None:
-        """Scroll down."""
-        scroll = self.query_one("#bible-scroll", VerticalScroll)
-        scroll.scroll_down()
+    def action_next_verse(self) -> None:
+        """Move to next verse."""
+        view = self.query_one("#bible-view", BibleView)
+        if not view.next_verse():
+            # At end of chapter, go to next chapter
+            self.action_next_chapter()
+        self._update_status()
 
-    def action_scroll_up(self) -> None:
-        """Scroll up."""
-        scroll = self.query_one("#bible-scroll", VerticalScroll)
-        scroll.scroll_up()
-
-    def action_page_down(self) -> None:
-        """Page down."""
-        scroll = self.query_one("#bible-scroll", VerticalScroll)
-        scroll.scroll_page_down()
-
-    def action_page_up(self) -> None:
-        """Page up."""
-        scroll = self.query_one("#bible-scroll", VerticalScroll)
-        scroll.scroll_page_up()
+    def action_prev_verse(self) -> None:
+        """Move to previous verse."""
+        view = self.query_one("#bible-view", BibleView)
+        if not view.prev_verse():
+            # At start of chapter, go to previous chapter (last verse)
+            if self._current_chapter > 1:
+                self._current_chapter -= 1
+                self._load_chapter()
+                view.last_verse()
+            elif book_index(self._current_book) > 0:
+                self._current_book = BOOK_ORDER[book_index(self._current_book) - 1]
+                self._current_chapter = book_chapters(self._current_book)
+                self._load_chapter()
+                view.last_verse()
+        self._update_status()
 
     def action_next_chapter(self) -> None:
-        """Go to next chapter."""
+        """Go to next chapter, verse 1."""
         max_chapters = book_chapters(self._current_book)
         if self._current_chapter < max_chapters:
             self._current_chapter += 1
@@ -207,30 +172,32 @@ class SwordApp(App):
             self.action_next_book()
 
     def action_prev_chapter(self) -> None:
-        """Go to previous chapter."""
+        """Go to previous chapter, verse 1."""
         if self._current_chapter > 1:
             self._current_chapter -= 1
             self._load_chapter()
         else:
-            self.action_prev_book(last_chapter=True)
+            # Go to previous book, last chapter
+            idx = book_index(self._current_book)
+            if idx > 0:
+                self._current_book = BOOK_ORDER[idx - 1]
+                self._current_chapter = book_chapters(self._current_book)
+                self._load_chapter()
 
     def action_next_book(self) -> None:
-        """Go to next book."""
+        """Go to next book, chapter 1, verse 1."""
         idx = book_index(self._current_book)
         if idx < len(BOOK_ORDER) - 1:
             self._current_book = BOOK_ORDER[idx + 1]
             self._current_chapter = 1
             self._load_chapter()
 
-    def action_prev_book(self, last_chapter: bool = False) -> None:
-        """Go to previous book."""
+    def action_prev_book(self) -> None:
+        """Go to previous book, chapter 1, verse 1."""
         idx = book_index(self._current_book)
         if idx > 0:
             self._current_book = BOOK_ORDER[idx - 1]
-            if last_chapter:
-                self._current_chapter = book_chapters(self._current_book)
-            else:
-                self._current_chapter = 1
+            self._current_chapter = 1
             self._load_chapter()
 
     def action_goto(self) -> None:
@@ -240,31 +207,121 @@ class SwordApp(App):
         self.mount(picker)
         picker.focus()
 
-    def action_command_mode(self) -> None:
-        """Enter command mode."""
-        if self._in_command_mode:
-            return
+    def action_goto_verse(self) -> None:
+        """Go to last verse (G without number)."""
+        view = self.query_one("#bible-view", BibleView)
+        view.last_verse()
+        self._update_status()
 
-        self._in_command_mode = True
-        self.query_one("#status-bar", StatusBar).display = False
+    def _goto_verse(self, verse: int) -> None:
+        """Go to specific verse number."""
+        view = self.query_one("#bible-view", BibleView)
+        view.move_to_verse(verse)
+        self._update_status()
 
-        cmd_input = self.query_one("#command-input", CommandInput)
-        cmd_input.display = True
-        cmd_input.reset(":")
-        cmd_input.focus()
+    def action_visual_mode(self) -> None:
+        """Toggle visual selection mode."""
+        view = self.query_one("#bible-view", BibleView)
+        if self._in_visual_mode:
+            view.end_visual_mode()
+            self._in_visual_mode = False
+            self.query_one("#status-bar", StatusBar).set_mode("normal")
+        else:
+            view.start_visual_mode()
+            self._in_visual_mode = True
+            self.query_one("#status-bar", StatusBar).set_mode("visual")
+        self._update_status()
 
-    def action_search_mode(self) -> None:
-        """Enter search mode with / prefix."""
-        if self._in_command_mode:
-            return
+    def action_escape(self) -> None:
+        """Handle escape key."""
+        if self._in_visual_mode:
+            view = self.query_one("#bible-view", BibleView)
+            view.end_visual_mode()
+            self._in_visual_mode = False
+            self.query_one("#status-bar", StatusBar).set_mode("normal")
+            self._update_status()
 
-        self._in_command_mode = True
-        self.query_one("#status-bar", StatusBar).display = False
+    def action_yank(self) -> None:
+        """Copy current verse or visual selection."""
+        view = self.query_one("#bible-view", BibleView)
+        text = view.get_selected_text()
 
-        cmd_input = self.query_one("#command-input", CommandInput)
-        cmd_input.display = True
-        cmd_input.reset("/")
-        cmd_input.focus()
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+
+            segments = view.get_selected_segments()
+            if len(segments) == 1:
+                msg = f"Gekopieerd: {self._current_book} {self._current_chapter}:{segments[0].verse}"
+            else:
+                start, end = view.get_visual_range()
+                msg = f"Gekopieerd: {self._current_book} {self._current_chapter}:{start}-{end}"
+            self.query_one("#status-bar", StatusBar).show_message(msg)
+        except ImportError:
+            self.query_one("#status-bar", StatusBar).show_message("pyperclip niet beschikbaar")
+
+        # Exit visual mode after yank
+        if self._in_visual_mode:
+            view.end_visual_mode()
+            self._in_visual_mode = False
+            self.query_one("#status-bar", StatusBar).set_mode("normal")
+
+    def action_yank_chapter(self) -> None:
+        """Copy entire chapter."""
+        view = self.query_one("#bible-view", BibleView)
+        text = view.get_all_text()
+
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+            self.query_one("#status-bar", StatusBar).show_message(
+                f"Gekopieerd: {self._current_book} {self._current_chapter} (heel hoofdstuk)"
+            )
+        except ImportError:
+            self.query_one("#status-bar", StatusBar).show_message("pyperclip niet beschikbaar")
+
+    def action_bookmark(self) -> None:
+        """Bookmark current verse or visual selection."""
+        view = self.query_one("#bible-view", BibleView)
+        start, end = view.get_visual_range()
+
+        if start == end:
+            ref = f"{self._current_book} {self._current_chapter}:{start}"
+        else:
+            ref = f"{self._current_book} {self._current_chapter}:{start}-{end}"
+
+        # Add bookmark via command handler
+        if self._command_handler:
+            from sword_tui.data.types import Bookmark
+            bookmark = Bookmark(
+                name=ref,
+                book=self._current_book,
+                chapter=self._current_chapter,
+                verse=start,
+                module=self._current_module,
+            )
+            self._command_handler._bookmarks.append(bookmark)
+            self._command_handler._save_bookmarks()
+            self.query_one("#status-bar", StatusBar).show_message(f"Bookmark: {ref}")
+
+        # Exit visual mode after bookmark
+        if self._in_visual_mode:
+            view.end_visual_mode()
+            self._in_visual_mode = False
+            self.query_one("#status-bar", StatusBar).set_mode("normal")
+
+    def action_show_bookmarks(self) -> None:
+        """Show bookmarks list."""
+        if self._command_handler:
+            bookmarks = self._command_handler.get_bookmarks()
+            if not bookmarks:
+                self.query_one("#status-bar", StatusBar).show_message("Geen bookmarks")
+            else:
+                # Show first few bookmarks in status bar for now
+                refs = [bm.reference for bm in bookmarks[:5]]
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Bookmarks: {', '.join(refs)}"
+                )
 
     def action_module_picker(self) -> None:
         """Open module picker."""
@@ -273,28 +330,53 @@ class SwordApp(App):
         self.mount(picker)
         picker.focus()
 
-    def action_toggle_parallel(self) -> None:
-        """Toggle parallel view (not yet implemented in simplified version)."""
-        self.query_one("#status-bar", StatusBar).show_message(
-            "Parallel view: gebruik 'nix run .' voor volledige versie"
-        )
+    def action_page_down(self) -> None:
+        """Page down (move multiple verses)."""
+        view = self.query_one("#bible-view", BibleView)
+        for _ in range(10):
+            if not view.next_verse():
+                break
+        self._update_status()
 
-    def action_yank(self) -> None:
-        """Copy current chapter text to clipboard."""
-        try:
-            import pyperclip
+    def action_page_up(self) -> None:
+        """Page up (move multiple verses)."""
+        view = self.query_one("#bible-view", BibleView)
+        for _ in range(10):
+            if not view.prev_verse():
+                break
+        self._update_status()
 
-            view = self.query_one("#bible-view", BibleView)
-            text = view.get_all_text()
-            pyperclip.copy(text)
+    # ==================== Command Mode ====================
 
-            self.query_one("#status-bar", StatusBar).show_message(
-                f"Gekopieerd: {self._current_book} {self._current_chapter}"
-            )
-        except ImportError:
-            self.query_one("#status-bar", StatusBar).show_message(
-                "pyperclip niet beschikbaar"
-            )
+    def _enter_command_mode(self) -> None:
+        """Enter command mode."""
+        if self._in_command_mode:
+            return
+        self._in_command_mode = True
+        self.query_one("#status-bar", StatusBar).display = False
+        cmd_input = self.query_one("#command-input", CommandInput)
+        cmd_input.display = True
+        cmd_input.reset(":")
+        cmd_input.focus()
+
+    def _enter_search_mode(self) -> None:
+        """Enter search mode."""
+        if self._in_command_mode:
+            return
+        self._in_command_mode = True
+        self.query_one("#status-bar", StatusBar).display = False
+        cmd_input = self.query_one("#command-input", CommandInput)
+        cmd_input.display = True
+        cmd_input.reset("/")
+        cmd_input.focus()
+
+    def _close_command_mode(self) -> None:
+        """Close command mode."""
+        self._in_command_mode = False
+        cmd_input = self.query_one("#command-input", CommandInput)
+        cmd_input.display = False
+        self.query_one("#status-bar", StatusBar).display = True
+        self.query_one("#bible-scroll").focus()
 
     # ==================== Event Handlers ====================
 
@@ -308,7 +390,7 @@ class SwordApp(App):
         prefix = event.prefix
 
         if prefix == "/":
-            self._enter_search_mode(command)
+            self._do_search(command)
         else:
             parsed = parse_command(command)
             result = self._command_handler.execute(parsed)
@@ -328,7 +410,9 @@ class SwordApp(App):
         self._load_chapter()
 
         if event.verse:
-            self.query_one("#bible-view", BibleView).highlight_verse(event.verse)
+            view = self.query_one("#bible-view", BibleView)
+            view.move_to_verse(event.verse)
+        self._update_status()
 
     def on_book_picker_cancelled(self, event: BookPicker.Cancelled) -> None:
         """Handle picker cancellation."""
@@ -347,93 +431,80 @@ class SwordApp(App):
         """Handle picker cancellation."""
         self._close_picker()
 
-    # ==================== Helper Methods ====================
-
-    def _close_command_mode(self) -> None:
-        """Close command mode."""
-        self._in_command_mode = False
-        cmd_input = self.query_one("#command-input", CommandInput)
-        cmd_input.display = False
-
-        self.query_one("#status-bar", StatusBar).display = True
-        self.query_one("#bible-scroll").focus()
-
     def _close_picker(self) -> None:
         """Close any open picker."""
         self._in_picker_mode = False
-
         for picker in self.query("BookPicker, ModulePicker"):
             picker.remove()
-
         self.query_one("#bible-scroll").focus()
+
+    # ==================== Helper Methods ====================
 
     def _load_chapter(self) -> None:
         """Load the current chapter."""
         segments = self._backend.lookup_chapter(
             self._current_book, self._current_chapter
         )
-        title = f"{self._current_book} {self._current_chapter}"
 
         view = self.query_one("#bible-view", BibleView)
-        view.update_content(segments, title)
+        view.update_content(segments, f"{self._current_book} {self._current_chapter}")
 
         scroll = self.query_one("#bible-scroll", VerticalScroll)
         scroll.scroll_home()
 
+        # Exit visual mode on chapter change
+        if self._in_visual_mode:
+            self._in_visual_mode = False
+            self.query_one("#status-bar", StatusBar).set_mode("normal")
+
         self._update_status()
 
     def _update_status(self) -> None:
-        """Update the status bar."""
+        """Update the status bar with current position."""
+        view = self.query_one("#bible-view", BibleView)
         status = self.query_one("#status-bar", StatusBar)
-        status.set_reference(f"{self._current_book} {self._current_chapter}")
+
+        if self._in_visual_mode:
+            start, end = view.get_visual_range()
+            status.set_position(
+                self._current_book,
+                self._current_chapter,
+                start,
+                end if end != start else None,
+            )
+        else:
+            status.set_position(
+                self._current_book,
+                self._current_chapter,
+                view.current_verse,
+            )
+
         status.set_module(self._current_module)
 
-    def _enter_search_mode(self, query: str) -> None:
-        """Enter search mode with results."""
+    def _do_search(self, query: str) -> None:
+        """Perform search and navigate to first result."""
         if not query:
             return
 
-        self._in_search_mode = True
-
-        # Perform search
         results = self._backend.search(query)
 
-        # Show results in status bar for now (simplified)
         if results:
             first = results[0]
             self.query_one("#status-bar", StatusBar).show_message(
-                f"Gevonden: {len(results)} resultaten, eerste: {first.reference}"
+                f"Gevonden: {len(results)} resultaten"
             )
-            # Navigate to first result
             self._current_book = first.book
             self._current_chapter = first.chapter
             self._load_chapter()
-            self.query_one("#bible-view", BibleView).set_search_query(query)
-            self.query_one("#bible-view", BibleView).highlight_verse(first.verse)
+
+            view = self.query_one("#bible-view", BibleView)
+            view.move_to_verse(first.verse)
+            view.set_search_query(query)
+            self._update_status()
         else:
             self.query_one("#status-bar", StatusBar).show_message(
                 f"Geen resultaten voor '{query}'"
             )
-
-        self._in_search_mode = False
-
-    def _close_search_mode(self) -> None:
-        """Close search mode."""
-        self._in_search_mode = False
-        self.query_one("#status-bar", StatusBar).set_mode("browse")
-        self.query_one("#bible-scroll").focus()
-
-    def _goto_search_result(self) -> None:
-        """Navigate to selected search result."""
-        pass
-
-    def _search_move_down(self) -> None:
-        """Move selection down in search results."""
-        pass
-
-    def _search_move_up(self) -> None:
-        """Move selection up in search results."""
-        pass
 
     def _handle_command_result(self, result) -> None:
         """Handle command execution result."""
@@ -451,7 +522,9 @@ class SwordApp(App):
             self._current_chapter = data.get("chapter", self._current_chapter)
             self._load_chapter()
             if data.get("verse"):
-                self.query_one("#bible-view", BibleView).highlight_verse(data["verse"])
+                view = self.query_one("#bible-view", BibleView)
+                view.move_to_verse(data["verse"])
+            self._update_status()
         elif action == "set_module":
             data = result.data or {}
             module = data.get("module", "")
@@ -461,15 +534,6 @@ class SwordApp(App):
                 self._load_chapter()
         elif action == "module_picker":
             self.action_module_picker()
-        elif action == "toggle_parallel":
-            self.action_toggle_parallel()
-        elif action == "search":
-            data = result.data or {}
-            query = data.get("query", "")
-            if query:
-                self._enter_search_mode(query)
-        elif action == "yank":
-            self.action_yank()
         elif action == "export":
             self._handle_export(result.data or {})
         elif result.message:
@@ -511,10 +575,12 @@ class SwordApp(App):
         """Format verses as plain text."""
         return "\n".join(f"{s.verse}. {s.text}" for s in segments)
 
-    def _format_html(self, segments: List[VerseSegment], book: str, chapter: int) -> str:
+    def _format_html(
+        self, segments: List[VerseSegment], book: str, chapter: int
+    ) -> str:
         """Format verses as HTML."""
         lines = [f"<h2>{book} {chapter}</h2>", "<p>"]
         for s in segments:
-            lines.append(f'<sup>{s.verse}</sup> {s.text} ')
+            lines.append(f"<sup>{s.verse}</sup> {s.text} ")
         lines.append("</p>")
         return "\n".join(lines)
