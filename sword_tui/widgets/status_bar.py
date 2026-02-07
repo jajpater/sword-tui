@@ -89,6 +89,9 @@ class StatusBar(Static):
         if self._mode == "visual":
             text.append(" | ")
             text.append("VISUAL", style="bold black on yellow")
+        elif self._mode == "parallel":
+            text.append(" | ")
+            text.append("PARALLEL", style="bold black on cyan")
 
         # Message or hints
         if self._message:
@@ -112,9 +115,9 @@ class StatusBar(Static):
             return [
                 ("j/k", "vers"),
                 ("]/[", "hfdst"),
-                ("v", "select"),
-                ("b", "mark"),
-                ("y", "copy"),
+                ("r", "ref"),
+                ("^F", "zoek"),
+                ("P", "parallel"),
             ]
         elif self._mode == "visual":
             return [
@@ -122,6 +125,13 @@ class StatusBar(Static):
                 ("y", "copy"),
                 ("b", "mark"),
                 ("Esc", "stop"),
+            ]
+        elif self._mode == "parallel":
+            return [
+                ("h/l", "pane"),
+                ("m/M", "module"),
+                ("L", "link"),
+                ("P", "sluiten"),
             ]
         elif self._mode == "command":
             return [

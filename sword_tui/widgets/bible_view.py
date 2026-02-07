@@ -165,15 +165,16 @@ class BibleView(Vertical):
 
     def _rebuild_widgets(self) -> None:
         """Rebuild all verse widgets."""
-        # Remove existing widgets
+        # Remove existing widgets properly
+        for widget in self._verse_widgets.values():
+            widget.remove()
         self._verse_widgets.clear()
-        self.remove_children()
 
-        # Create new widgets
+        # Create new widgets (no IDs needed, we track by verse number)
         vis_start, vis_end = self.get_visual_range() if self._visual_mode else (0, 0)
 
         for seg in self._segments:
-            widget = VerseRow(seg, id=f"verse-{seg.verse}")
+            widget = VerseRow(seg)
             is_current = seg.verse == self._current_verse
             is_selected = self._visual_mode and vis_start <= seg.verse <= vis_end
             widget.set_state(is_current, is_selected, self._search_query)
@@ -193,7 +194,8 @@ class BibleView(Vertical):
         """Scroll to make current verse visible."""
         if self._current_verse in self._verse_widgets:
             widget = self._verse_widgets[self._current_verse]
-            widget.scroll_visible(top=True)
+            # Only scroll if verse is out of view, don't force position
+            widget.scroll_visible()
 
     def set_search_query(self, query: str = "") -> None:
         """Set the search term for highlighting."""

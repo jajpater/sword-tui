@@ -21,6 +21,7 @@ from sword_tui.widgets import (
     BookPicker,
     CommandInput,
     ModulePicker,
+    ParallelView,
     StatusBar,
 )
 
@@ -35,8 +36,8 @@ class SwordApp(App):
         Binding("q", "quit", "Quit", show=False),
         Binding("j", "next_verse", "Next verse", show=False),
         Binding("k", "prev_verse", "Prev verse", show=False),
-        Binding("g", "goto", "Goto", show=False),
-        Binding("G", "goto_verse", "Goto verse", show=False),
+        Binding("r", "goto", "Reference", show=False),
+        Binding("G", "last_verse", "Last verse", show=False),
         Binding("m", "module_picker", "Module", show=False),
         Binding("v", "visual_mode", "Visual", show=False),
         Binding("y", "yank", "Copy", show=False),
@@ -49,7 +50,15 @@ class SwordApp(App):
         Binding("}", "next_book", "Next book", show=False),
         Binding("{", "prev_book", "Prev book", show=False),
         Binding("ctrl+d", "page_down", "Page down", show=False),
-        Binding("ctrl+u", "page_up", "Page up", show=False),
+        Binding("ctrl+u", "page_up", "Page_up", show=False),
+        Binding("ctrl+f", "search_chapter", "Search in chapter", show=False),
+        Binding("n", "search_next", "Next match", show=False),
+        Binding("N", "search_prev", "Previous match", show=False),
+        Binding("P", "toggle_parallel", "Parallel view", show=False),
+        Binding("h", "focus_left_pane", "Left pane", show=False),
+        Binding("l", "focus_right_pane", "Right pane", show=False),
+        Binding("M", "secondary_module_picker", "Secondary module", show=False),
+        Binding("L", "toggle_pane_link", "Link/unlink panes", show=False),
     ]
 
     def __init__(self) -> None:
@@ -64,9 +73,26 @@ class SwordApp(App):
         self._in_command_mode = False
         self._in_visual_mode = False
         self._in_picker_mode = False
+        self._in_parallel_mode = False
+        self._picking_secondary_module = False
+        self._panes_linked = True  # Whether parallel panes show same passage
+        self._active_pane = "left"  # Which pane is active: "left" or "right"
 
-        # Digit buffer for numeric input (e.g., "5G" to go to verse 5)
-        self._digit_buffer = ""
+        # Right pane state (when unlinked)
+        self._right_book = "Genesis"
+        self._right_chapter = 1
+
+        # Search state
+        self._chapter_search_query = ""
+        self._search_matches: list[int] = []  # Verse numbers with matches
+        self._search_match_index = 0
+
+        # Key sequence buffer (for gg)
+        self._key_buffer = ""
+
+        # Secondary module for parallel view
+        self._secondary_module = ""
+        self._secondary_backend: Optional[DiathekeBackend] = None
 
         # Backend
         self._backend = DiathekeBackend(self._current_module)
@@ -83,8 +109,11 @@ class SwordApp(App):
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
         yield Header()
+        # Normal single-pane view
         with VerticalScroll(id="bible-scroll"):
             yield BibleView(id="bible-view")
+        # Parallel view (two panes, initially hidden)
+        yield ParallelView(id="parallel-view")
         yield CommandInput(
             commands=["quit", "help", "module", "export", "goto"],
             id="command-input",
@@ -95,8 +124,9 @@ class SwordApp(App):
         """Initialize the app after mounting."""
         self._command_handler = CommandHandler(self)
 
-        # Hide command input
+        # Hide command input and parallel view initially
         self.query_one("#command-input").display = False
+        self.query_one("#parallel-view").display = False
 
         # Load initial content
         self._load_chapter()
@@ -109,96 +139,143 @@ class SwordApp(App):
         if self._in_command_mode or self._in_picker_mode:
             return
 
-        key = event.key
         char = event.character
 
-        # Handle digits for numeric input (e.g., "12G" goes to verse 12)
-        if char and char.isdigit():
-            self._digit_buffer += char
-            return
+        # Handle gg sequence (go to first verse)
+        if char == "g":
+            if self._key_buffer == "g":
+                self._key_buffer = ""
+                self.action_first_verse()
+                event.stop()
+                return
+            else:
+                self._key_buffer = "g"
+                return
+        else:
+            # Clear key buffer on other keys
+            self._key_buffer = ""
 
-        # Handle special keys with digit prefix
-        if self._digit_buffer and char == "G":
-            verse = int(self._digit_buffer)
-            self._digit_buffer = ""
-            self._goto_verse(verse)
-            event.stop()
-            return
-
-        # Clear digit buffer on other keys
-        self._digit_buffer = ""
-
-        # Handle colon and slash for command/search mode
+        # Handle colon for command/verse mode
         if char == ":":
             event.stop()
             self._enter_command_mode()
         elif char == "/":
+            # Reserved for future KWIC search
             event.stop()
-            self._enter_search_mode()
+            self.query_one("#status-bar", StatusBar).show_message(
+                "KWIC zoeken komt later - gebruik Ctrl+F voor hoofdstuk"
+            )
 
     # ==================== Actions ====================
 
     def action_next_verse(self) -> None:
         """Move to next verse."""
-        view = self.query_one("#bible-view", BibleView)
+        view = self._get_active_view()
         if not view.next_verse():
-            # At end of chapter, go to next chapter
             self.action_next_chapter()
+        elif self._in_parallel_mode and self._panes_linked:
+            # Sync other pane
+            parallel = self.query_one("#parallel-view", ParallelView)
+            other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+            other.set_current_verse(view.current_verse)
         self._update_status()
 
     def action_prev_verse(self) -> None:
         """Move to previous verse."""
-        view = self.query_one("#bible-view", BibleView)
+        view = self._get_active_view()
         if not view.prev_verse():
-            # At start of chapter, go to previous chapter (last verse)
-            if self._current_chapter > 1:
-                self._current_chapter -= 1
-                self._load_chapter()
+            # Go to previous chapter
+            book = self._get_active_book()
+            chapter = self._get_active_chapter()
+            if chapter > 1:
+                self._set_active_chapter(chapter - 1)
+                if self._panes_linked:
+                    self._load_chapter()
+                else:
+                    self._load_active_pane_chapter()
                 view.last_verse()
-            elif book_index(self._current_book) > 0:
-                self._current_book = BOOK_ORDER[book_index(self._current_book) - 1]
-                self._current_chapter = book_chapters(self._current_book)
-                self._load_chapter()
+                if self._in_parallel_mode and self._panes_linked:
+                    parallel = self.query_one("#parallel-view", ParallelView)
+                    other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+                    other.last_verse()
+            elif book_index(book) > 0:
+                new_book = BOOK_ORDER[book_index(book) - 1]
+                self._set_active_book(new_book)
+                self._set_active_chapter(book_chapters(new_book))
+                if self._panes_linked:
+                    self._load_chapter()
+                else:
+                    self._load_active_pane_chapter()
                 view.last_verse()
+                if self._in_parallel_mode and self._panes_linked:
+                    parallel = self.query_one("#parallel-view", ParallelView)
+                    other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+                    other.last_verse()
+        elif self._in_parallel_mode and self._panes_linked:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+            other.set_current_verse(view.current_verse)
         self._update_status()
 
     def action_next_chapter(self) -> None:
         """Go to next chapter, verse 1."""
-        max_chapters = book_chapters(self._current_book)
-        if self._current_chapter < max_chapters:
-            self._current_chapter += 1
-            self._load_chapter()
+        book = self._get_active_book()
+        chapter = self._get_active_chapter()
+        max_chapters = book_chapters(book)
+        if chapter < max_chapters:
+            self._set_active_chapter(chapter + 1)
+            if self._panes_linked or not self._in_parallel_mode:
+                self._load_chapter()
+            else:
+                self._load_active_pane_chapter()
         else:
             self.action_next_book()
 
     def action_prev_chapter(self) -> None:
         """Go to previous chapter, verse 1."""
-        if self._current_chapter > 1:
-            self._current_chapter -= 1
-            self._load_chapter()
+        book = self._get_active_book()
+        chapter = self._get_active_chapter()
+        if chapter > 1:
+            self._set_active_chapter(chapter - 1)
+            if self._panes_linked or not self._in_parallel_mode:
+                self._load_chapter()
+            else:
+                self._load_active_pane_chapter()
         else:
             # Go to previous book, last chapter
-            idx = book_index(self._current_book)
+            idx = book_index(book)
             if idx > 0:
-                self._current_book = BOOK_ORDER[idx - 1]
-                self._current_chapter = book_chapters(self._current_book)
-                self._load_chapter()
+                new_book = BOOK_ORDER[idx - 1]
+                self._set_active_book(new_book)
+                self._set_active_chapter(book_chapters(new_book))
+                if self._panes_linked or not self._in_parallel_mode:
+                    self._load_chapter()
+                else:
+                    self._load_active_pane_chapter()
 
     def action_next_book(self) -> None:
         """Go to next book, chapter 1, verse 1."""
-        idx = book_index(self._current_book)
+        book = self._get_active_book()
+        idx = book_index(book)
         if idx < len(BOOK_ORDER) - 1:
-            self._current_book = BOOK_ORDER[idx + 1]
-            self._current_chapter = 1
-            self._load_chapter()
+            self._set_active_book(BOOK_ORDER[idx + 1])
+            self._set_active_chapter(1)
+            if self._panes_linked or not self._in_parallel_mode:
+                self._load_chapter()
+            else:
+                self._load_active_pane_chapter()
 
     def action_prev_book(self) -> None:
         """Go to previous book, chapter 1, verse 1."""
-        idx = book_index(self._current_book)
+        book = self._get_active_book()
+        idx = book_index(book)
         if idx > 0:
-            self._current_book = BOOK_ORDER[idx - 1]
-            self._current_chapter = 1
-            self._load_chapter()
+            self._set_active_book(BOOK_ORDER[idx - 1])
+            self._set_active_chapter(1)
+            if self._panes_linked or not self._in_parallel_mode:
+                self._load_chapter()
+            else:
+                self._load_active_pane_chapter()
 
     def action_goto(self) -> None:
         """Open goto dialog."""
@@ -207,83 +284,185 @@ class SwordApp(App):
         self.mount(picker)
         picker.focus()
 
-    def action_goto_verse(self) -> None:
-        """Go to last verse (G without number)."""
-        view = self.query_one("#bible-view", BibleView)
+    def action_first_verse(self) -> None:
+        """Go to first verse (gg)."""
+        view = self._get_active_view()
+        view.first_verse()
+        if self._in_parallel_mode and self._panes_linked:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+            other.first_verse()
+        self._update_status()
+
+    def action_last_verse(self) -> None:
+        """Go to last verse (G)."""
+        view = self._get_active_view()
         view.last_verse()
+        if self._in_parallel_mode and self._panes_linked:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+            other.last_verse()
         self._update_status()
 
     def _goto_verse(self, verse: int) -> None:
         """Go to specific verse number."""
-        view = self.query_one("#bible-view", BibleView)
+        view = self._get_active_view()
         view.move_to_verse(verse)
+        if self._in_parallel_mode and self._panes_linked:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+            other.move_to_verse(verse)
         self._update_status()
 
     def action_visual_mode(self) -> None:
         """Toggle visual selection mode."""
-        view = self.query_one("#bible-view", BibleView)
-        if self._in_visual_mode:
-            view.end_visual_mode()
-            self._in_visual_mode = False
-            self.query_one("#status-bar", StatusBar).set_mode("normal")
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            left = parallel.query_one("#left-view", BibleView)
+            right = parallel.query_one("#right-view", BibleView)
+            if self._in_visual_mode:
+                left.end_visual_mode()
+                right.end_visual_mode()
+                self._in_visual_mode = False
+                status.set_mode("parallel")
+            else:
+                left.start_visual_mode()
+                right.start_visual_mode()
+                self._in_visual_mode = True
+                status.set_mode("visual")
         else:
-            view.start_visual_mode()
-            self._in_visual_mode = True
-            self.query_one("#status-bar", StatusBar).set_mode("visual")
+            view = self.query_one("#bible-view", BibleView)
+            if self._in_visual_mode:
+                view.end_visual_mode()
+                self._in_visual_mode = False
+                status.set_mode("normal")
+            else:
+                view.start_visual_mode()
+                self._in_visual_mode = True
+                status.set_mode("visual")
         self._update_status()
 
     def action_escape(self) -> None:
         """Handle escape key."""
         if self._in_visual_mode:
-            view = self.query_one("#bible-view", BibleView)
-            view.end_visual_mode()
-            self._in_visual_mode = False
-            self.query_one("#status-bar", StatusBar).set_mode("normal")
+            if self._in_parallel_mode:
+                parallel = self.query_one("#parallel-view", ParallelView)
+                parallel.query_one("#left-view", BibleView).end_visual_mode()
+                parallel.query_one("#right-view", BibleView).end_visual_mode()
+                self._in_visual_mode = False
+                self.query_one("#status-bar", StatusBar).set_mode("parallel")
+            else:
+                view = self.query_one("#bible-view", BibleView)
+                view.end_visual_mode()
+                self._in_visual_mode = False
+                self.query_one("#status-bar", StatusBar).set_mode("normal")
             self._update_status()
 
     def action_yank(self) -> None:
         """Copy current verse or visual selection."""
-        view = self.query_one("#bible-view", BibleView)
-        text = view.get_selected_text()
+        status = self.query_one("#status-bar", StatusBar)
 
-        try:
-            import pyperclip
-            pyperclip.copy(text)
+        if self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            left = parallel.query_one("#left-view", BibleView)
+            right = parallel.query_one("#right-view", BibleView)
 
-            segments = view.get_selected_segments()
-            if len(segments) == 1:
-                msg = f"Gekopieerd: {self._current_book} {self._current_chapter}:{segments[0].verse}"
-            else:
-                start, end = view.get_visual_range()
-                msg = f"Gekopieerd: {self._current_book} {self._current_chapter}:{start}-{end}"
-            self.query_one("#status-bar", StatusBar).show_message(msg)
-        except ImportError:
-            self.query_one("#status-bar", StatusBar).show_message("pyperclip niet beschikbaar")
+            # Get text from both panes
+            left_text = left.get_selected_text()
+            right_text = right.get_selected_text()
+
+            # Format: both translations
+            text = f"[{self._current_module}]\n{left_text}\n\n[{self._secondary_module}]\n{right_text}"
+
+            try:
+                import pyperclip
+                pyperclip.copy(text)
+
+                start, end = left.get_visual_range()
+                if start == end:
+                    msg = f"Gekopieerd: {self._current_book} {self._current_chapter}:{start} (2 vertalingen)"
+                else:
+                    msg = f"Gekopieerd: {self._current_book} {self._current_chapter}:{start}-{end} (2 vertalingen)"
+                status.show_message(msg)
+            except ImportError:
+                status.show_message("pyperclip niet beschikbaar")
+        else:
+            view = self.query_one("#bible-view", BibleView)
+            text = view.get_selected_text()
+
+            try:
+                import pyperclip
+                pyperclip.copy(text)
+
+                segments = view.get_selected_segments()
+                if len(segments) == 1:
+                    msg = f"Gekopieerd: {self._current_book} {self._current_chapter}:{segments[0].verse}"
+                else:
+                    start, end = view.get_visual_range()
+                    msg = f"Gekopieerd: {self._current_book} {self._current_chapter}:{start}-{end}"
+                status.show_message(msg)
+            except ImportError:
+                status.show_message("pyperclip niet beschikbaar")
 
         # Exit visual mode after yank
         if self._in_visual_mode:
-            view.end_visual_mode()
-            self._in_visual_mode = False
-            self.query_one("#status-bar", StatusBar).set_mode("normal")
+            if self._in_parallel_mode:
+                parallel = self.query_one("#parallel-view", ParallelView)
+                parallel.query_one("#left-view", BibleView).end_visual_mode()
+                parallel.query_one("#right-view", BibleView).end_visual_mode()
+                self._in_visual_mode = False
+                status.set_mode("parallel")
+            else:
+                view = self.query_one("#bible-view", BibleView)
+                view.end_visual_mode()
+                self._in_visual_mode = False
+                status.set_mode("normal")
 
     def action_yank_chapter(self) -> None:
         """Copy entire chapter."""
-        view = self.query_one("#bible-view", BibleView)
-        text = view.get_all_text()
+        status = self.query_one("#status-bar", StatusBar)
 
-        try:
-            import pyperclip
-            pyperclip.copy(text)
-            self.query_one("#status-bar", StatusBar).show_message(
-                f"Gekopieerd: {self._current_book} {self._current_chapter} (heel hoofdstuk)"
-            )
-        except ImportError:
-            self.query_one("#status-bar", StatusBar).show_message("pyperclip niet beschikbaar")
+        if self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            left = parallel.query_one("#left-view", BibleView)
+            right = parallel.query_one("#right-view", BibleView)
+
+            text = f"[{self._current_module}]\n{left.get_all_text()}\n\n[{self._secondary_module}]\n{right.get_all_text()}"
+
+            try:
+                import pyperclip
+                pyperclip.copy(text)
+                status.show_message(
+                    f"Gekopieerd: {self._current_book} {self._current_chapter} (2 vertalingen)"
+                )
+            except ImportError:
+                status.show_message("pyperclip niet beschikbaar")
+        else:
+            view = self.query_one("#bible-view", BibleView)
+            text = view.get_all_text()
+
+            try:
+                import pyperclip
+                pyperclip.copy(text)
+                status.show_message(
+                    f"Gekopieerd: {self._current_book} {self._current_chapter} (heel hoofdstuk)"
+                )
+            except ImportError:
+                status.show_message("pyperclip niet beschikbaar")
 
     def action_bookmark(self) -> None:
         """Bookmark current verse or visual selection."""
-        view = self.query_one("#bible-view", BibleView)
-        start, end = view.get_visual_range()
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            left = parallel.query_one("#left-view", BibleView)
+            start, end = left.get_visual_range()
+        else:
+            view = self.query_one("#bible-view", BibleView)
+            start, end = view.get_visual_range()
 
         if start == end:
             ref = f"{self._current_book} {self._current_chapter}:{start}"
@@ -302,13 +481,21 @@ class SwordApp(App):
             )
             self._command_handler._bookmarks.append(bookmark)
             self._command_handler._save_bookmarks()
-            self.query_one("#status-bar", StatusBar).show_message(f"Bookmark: {ref}")
+            status.show_message(f"Bookmark: {ref}")
 
         # Exit visual mode after bookmark
         if self._in_visual_mode:
-            view.end_visual_mode()
-            self._in_visual_mode = False
-            self.query_one("#status-bar", StatusBar).set_mode("normal")
+            if self._in_parallel_mode:
+                parallel = self.query_one("#parallel-view", ParallelView)
+                parallel.query_one("#left-view", BibleView).end_visual_mode()
+                parallel.query_one("#right-view", BibleView).end_visual_mode()
+                self._in_visual_mode = False
+                status.set_mode("parallel")
+            else:
+                view = self.query_one("#bible-view", BibleView)
+                view.end_visual_mode()
+                self._in_visual_mode = False
+                status.set_mode("normal")
 
     def action_show_bookmarks(self) -> None:
         """Show bookmarks list."""
@@ -324,26 +511,188 @@ class SwordApp(App):
                 )
 
     def action_module_picker(self) -> None:
-        """Open module picker."""
+        """Open module picker for primary module."""
         self._in_picker_mode = True
+        self._picking_secondary_module = False
         picker = ModulePicker(current_module=self._current_module, id="module-picker")
         self.mount(picker)
         picker.focus()
 
+    def action_secondary_module_picker(self) -> None:
+        """Open module picker for secondary module (parallel view only)."""
+        if not self._in_parallel_mode:
+            self.query_one("#status-bar", StatusBar).show_message(
+                "M werkt alleen in parallel view"
+            )
+            return
+        self._in_picker_mode = True
+        self._picking_secondary_module = True
+        picker = ModulePicker(current_module=self._secondary_module, id="module-picker")
+        self.mount(picker)
+        picker.focus()
+
+    def action_toggle_parallel(self) -> None:
+        """Toggle parallel view mode."""
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._in_parallel_mode:
+            # Switch back to single view
+            self._in_parallel_mode = False
+            self.query_one("#bible-scroll").display = True
+            self.query_one("#parallel-view").display = False
+            self.query_one("#bible-scroll").focus()
+            status.set_mode("normal")
+        else:
+            # Switch to parallel view - need to pick secondary module
+            modules = get_installed_modules()
+            if len(modules) < 2:
+                status.show_message("Minimaal 2 modules nodig voor parallel view")
+                return
+
+            # Find a different module for secondary
+            for mod in modules:
+                if mod.name != self._current_module:
+                    self._secondary_module = mod.name
+                    break
+
+            self._secondary_backend = DiathekeBackend(self._secondary_module)
+            self._in_parallel_mode = True
+
+            # Hide single view, show parallel view
+            self.query_one("#bible-scroll").display = False
+            self.query_one("#parallel-view").display = True
+
+            # Load content into both panes
+            self._load_parallel_chapter()
+            self.query_one("#parallel-view", ParallelView).focus_left()
+            status.set_mode("parallel")
+
+    def action_focus_left_pane(self) -> None:
+        """Focus the left pane in parallel view."""
+        if self._in_parallel_mode:
+            self._active_pane = "left"
+            self.query_one("#parallel-view", ParallelView).focus_left()
+            self._update_status()
+
+    def action_focus_right_pane(self) -> None:
+        """Focus the right pane in parallel view."""
+        if self._in_parallel_mode:
+            self._active_pane = "right"
+            self.query_one("#parallel-view", ParallelView).focus_right()
+            self._update_status()
+
+    def action_search_chapter(self) -> None:
+        """Search within current chapter (Ctrl+F)."""
+        self._in_command_mode = True
+        self.query_one("#status-bar", StatusBar).display = False
+        cmd_input = self.query_one("#command-input", CommandInput)
+        cmd_input.display = True
+        cmd_input.reset("?")  # Use ? prefix for chapter search
+        cmd_input.focus()
+
+    def action_search_next(self) -> None:
+        """Go to next search match (n)."""
+        if not self._search_matches:
+            self.query_one("#status-bar", StatusBar).show_message("Geen zoekopdracht")
+            return
+
+        self._search_match_index = (self._search_match_index + 1) % len(self._search_matches)
+        verse = self._search_matches[self._search_match_index]
+        self._goto_verse(verse)
+        self.query_one("#status-bar", StatusBar).show_message(
+            f"Match {self._search_match_index + 1}/{len(self._search_matches)}"
+        )
+
+    def action_search_prev(self) -> None:
+        """Go to previous search match (N)."""
+        if not self._search_matches:
+            self.query_one("#status-bar", StatusBar).show_message("Geen zoekopdracht")
+            return
+
+        self._search_match_index = (self._search_match_index - 1) % len(self._search_matches)
+        verse = self._search_matches[self._search_match_index]
+        self._goto_verse(verse)
+        self.query_one("#status-bar", StatusBar).show_message(
+            f"Match {self._search_match_index + 1}/{len(self._search_matches)}"
+        )
+
+    def action_toggle_pane_link(self) -> None:
+        """Toggle linking between parallel panes (L)."""
+        if not self._in_parallel_mode:
+            self.query_one("#status-bar", StatusBar).show_message(
+                "L werkt alleen in parallel view"
+            )
+            return
+
+        self._panes_linked = not self._panes_linked
+        status = self.query_one("#status-bar", StatusBar)
+        if self._panes_linked:
+            status.show_message("Panes gekoppeld")
+            # Sync right pane to left pane
+            parallel = self.query_one("#parallel-view", ParallelView)
+            left = parallel.query_one("#left-view", BibleView)
+            right = parallel.query_one("#right-view", BibleView)
+            right.set_current_verse(left.current_verse)
+        else:
+            status.show_message("Panes ontkoppeld - navigeer onafhankelijk")
+
+    def _load_parallel_chapter(self) -> None:
+        """Load current chapter into both parallel panes."""
+        parallel = self.query_one("#parallel-view", ParallelView)
+
+        # Left pane: primary module with current book/chapter
+        left_title = f"{self._current_book} {self._current_chapter}"
+        left_segments = self._backend.lookup_chapter(
+            self._current_book, self._current_chapter
+        )
+        parallel.update_left(left_segments, self._current_module, left_title)
+
+        # Right pane: secondary module
+        if self._secondary_backend:
+            # Use right pane's own book/chapter when unlinked
+            if self._panes_linked:
+                right_book = self._current_book
+                right_chapter = self._current_chapter
+            else:
+                right_book = self._right_book
+                right_chapter = self._right_chapter
+
+            right_title = f"{right_book} {right_chapter}"
+            right_segments = self._secondary_backend.lookup_chapter(right_book, right_chapter)
+            parallel.update_right(right_segments, self._secondary_module, right_title)
+
     def action_page_down(self) -> None:
         """Page down (move multiple verses)."""
-        view = self.query_one("#bible-view", BibleView)
-        for _ in range(10):
-            if not view.next_verse():
-                break
+        if self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            left = parallel.query_one("#left-view", BibleView)
+            for _ in range(10):
+                if not left.next_verse():
+                    break
+            if self._panes_linked:
+                parallel.query_one("#right-view", BibleView).set_current_verse(left.current_verse)
+        else:
+            view = self.query_one("#bible-view", BibleView)
+            for _ in range(10):
+                if not view.next_verse():
+                    break
         self._update_status()
 
     def action_page_up(self) -> None:
         """Page up (move multiple verses)."""
-        view = self.query_one("#bible-view", BibleView)
-        for _ in range(10):
-            if not view.prev_verse():
-                break
+        if self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            left = parallel.query_one("#left-view", BibleView)
+            for _ in range(10):
+                if not left.prev_verse():
+                    break
+            if self._panes_linked:
+                parallel.query_one("#right-view", BibleView).set_current_verse(left.current_verse)
+        else:
+            view = self.query_one("#bible-view", BibleView)
+            for _ in range(10):
+                if not view.prev_verse():
+                    break
         self._update_status()
 
     # ==================== Command Mode ====================
@@ -359,24 +708,16 @@ class SwordApp(App):
         cmd_input.reset(":")
         cmd_input.focus()
 
-    def _enter_search_mode(self) -> None:
-        """Enter search mode."""
-        if self._in_command_mode:
-            return
-        self._in_command_mode = True
-        self.query_one("#status-bar", StatusBar).display = False
-        cmd_input = self.query_one("#command-input", CommandInput)
-        cmd_input.display = True
-        cmd_input.reset("/")
-        cmd_input.focus()
-
     def _close_command_mode(self) -> None:
         """Close command mode."""
         self._in_command_mode = False
         cmd_input = self.query_one("#command-input", CommandInput)
         cmd_input.display = False
         self.query_one("#status-bar", StatusBar).display = True
-        self.query_one("#bible-scroll").focus()
+        if self._in_parallel_mode:
+            self.query_one("#parallel-view", ParallelView).focus_left()
+        else:
+            self.query_one("#bible-scroll").focus()
 
     # ==================== Event Handlers ====================
 
@@ -389,12 +730,17 @@ class SwordApp(App):
         command = event.command
         prefix = event.prefix
 
-        if prefix == "/":
-            self._do_search(command)
-        else:
-            parsed = parse_command(command)
-            result = self._command_handler.execute(parsed)
-            self._handle_command_result(result)
+        if prefix == "?":
+            # Chapter search (Ctrl+F)
+            self._do_chapter_search(command)
+        elif prefix == ":":
+            # Check if command is just a number (go to verse)
+            if command.isdigit():
+                self._goto_verse(int(command))
+            else:
+                parsed = parse_command(command)
+                result = self._command_handler.execute(parsed)
+                self._handle_command_result(result)
 
     def on_command_input_command_cancelled(
         self, event: CommandInput.CommandCancelled
@@ -405,13 +751,21 @@ class SwordApp(App):
     def on_book_picker_book_selected(self, event: BookPicker.BookSelected) -> None:
         """Handle book selection from picker."""
         self._close_picker()
-        self._current_book = event.book
-        self._current_chapter = event.chapter
-        self._load_chapter()
+        self._set_active_book(event.book)
+        self._set_active_chapter(event.chapter)
+
+        if self._panes_linked or not self._in_parallel_mode:
+            self._load_chapter()
+        else:
+            self._load_active_pane_chapter()
 
         if event.verse:
-            view = self.query_one("#bible-view", BibleView)
+            view = self._get_active_view()
             view.move_to_verse(event.verse)
+            if self._in_parallel_mode and self._panes_linked:
+                parallel = self.query_one("#parallel-view", ParallelView)
+                other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+                other.move_to_verse(event.verse)
         self._update_status()
 
     def on_book_picker_cancelled(self, event: BookPicker.Cancelled) -> None:
@@ -423,9 +777,19 @@ class SwordApp(App):
     ) -> None:
         """Handle module selection from picker."""
         self._close_picker()
-        self._current_module = event.module.name
-        self._backend.set_module(self._current_module)
-        self._load_chapter()
+
+        if self._picking_secondary_module:
+            # Update secondary module for parallel view
+            self._secondary_module = event.module.name
+            self._secondary_backend = DiathekeBackend(self._secondary_module)
+            if self._in_parallel_mode:
+                self._load_parallel_chapter()
+            self._update_status()
+        else:
+            # Update primary module
+            self._current_module = event.module.name
+            self._backend.set_module(self._current_module)
+            self._load_chapter()
 
     def on_module_picker_cancelled(self, event: ModulePicker.Cancelled) -> None:
         """Handle picker cancellation."""
@@ -436,12 +800,60 @@ class SwordApp(App):
         self._in_picker_mode = False
         for picker in self.query("BookPicker, ModulePicker"):
             picker.remove()
-        self.query_one("#bible-scroll").focus()
+        if self._in_parallel_mode:
+            self.query_one("#parallel-view", ParallelView).focus_left()
+        else:
+            self.query_one("#bible-scroll").focus()
 
     # ==================== Helper Methods ====================
 
+    def _get_active_book(self) -> str:
+        """Get the book for the active pane."""
+        if self._in_parallel_mode and not self._panes_linked and self._active_pane == "right":
+            return self._right_book
+        return self._current_book
+
+    def _set_active_book(self, book: str) -> None:
+        """Set the book for the active pane."""
+        if self._in_parallel_mode and not self._panes_linked and self._active_pane == "right":
+            self._right_book = book
+        else:
+            self._current_book = book
+            if self._panes_linked:
+                self._right_book = book
+
+    def _get_active_chapter(self) -> int:
+        """Get the chapter for the active pane."""
+        if self._in_parallel_mode and not self._panes_linked and self._active_pane == "right":
+            return self._right_chapter
+        return self._current_chapter
+
+    def _set_active_chapter(self, chapter: int) -> None:
+        """Set the chapter for the active pane."""
+        if self._in_parallel_mode and not self._panes_linked and self._active_pane == "right":
+            self._right_chapter = chapter
+        else:
+            self._current_chapter = chapter
+            if self._panes_linked:
+                self._right_chapter = chapter
+
+    def _get_active_view(self) -> BibleView:
+        """Get the active BibleView widget."""
+        if self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            if self._active_pane == "right":
+                return parallel.query_one("#right-view", BibleView)
+            return parallel.query_one("#left-view", BibleView)
+        return self.query_one("#bible-view", BibleView)
+
+    def _get_active_backend(self) -> DiathekeBackend:
+        """Get the backend for the active pane."""
+        if self._in_parallel_mode and self._active_pane == "right" and self._secondary_backend:
+            return self._secondary_backend
+        return self._backend
+
     def _load_chapter(self) -> None:
-        """Load the current chapter."""
+        """Load the current chapter (for single view or linked parallel)."""
         segments = self._backend.lookup_chapter(
             self._current_book, self._current_chapter
         )
@@ -452,6 +864,10 @@ class SwordApp(App):
         scroll = self.query_one("#bible-scroll", VerticalScroll)
         scroll.scroll_home()
 
+        # Also update parallel view if active
+        if self._in_parallel_mode:
+            self._load_parallel_chapter()
+
         # Exit visual mode on chapter change
         if self._in_visual_mode:
             self._in_visual_mode = False
@@ -459,52 +875,110 @@ class SwordApp(App):
 
         self._update_status()
 
+    def _load_active_pane_chapter(self) -> None:
+        """Load chapter for only the active pane (when unlinked)."""
+        if not self._in_parallel_mode:
+            self._load_chapter()
+            return
+
+        parallel = self.query_one("#parallel-view", ParallelView)
+        book = self._get_active_book()
+        chapter = self._get_active_chapter()
+        backend = self._get_active_backend()
+
+        segments = backend.lookup_chapter(book, chapter)
+        title = f"{book} {chapter}"
+
+        if self._active_pane == "right":
+            right = parallel.query_one("#right-view", BibleView)
+            right.update_content(segments, title)
+        else:
+            left = parallel.query_one("#left-view", BibleView)
+            left.update_content(segments, title)
+            # Update header
+            parallel.update_left(segments, self._current_module, title)
+
+        self._update_status()
+
     def _update_status(self) -> None:
         """Update the status bar with current position."""
-        view = self.query_one("#bible-view", BibleView)
         status = self.query_one("#status-bar", StatusBar)
 
-        if self._in_visual_mode:
-            start, end = view.get_visual_range()
-            status.set_position(
-                self._current_book,
-                self._current_chapter,
-                start,
-                end if end != start else None,
-            )
+        if self._in_parallel_mode:
+            # Show position for active pane
+            view = self._get_active_view()
+            book = self._get_active_book()
+            chapter = self._get_active_chapter()
+
+            if self._in_visual_mode:
+                start, end = view.get_visual_range()
+                status.set_position(book, chapter, start, end if end != start else None)
+            else:
+                status.set_position(book, chapter, view.current_verse)
+
+            # Show modules with active indicator
+            if self._panes_linked:
+                status.set_module(f"{self._current_module} | {self._secondary_module}")
+            else:
+                left_mod = f"[{self._current_module}]" if self._active_pane == "left" else self._current_module
+                right_mod = f"[{self._secondary_module}]" if self._active_pane == "right" else self._secondary_module
+                status.set_module(f"{left_mod} | {right_mod}")
         else:
-            status.set_position(
-                self._current_book,
-                self._current_chapter,
-                view.current_verse,
-            )
+            view = self.query_one("#bible-view", BibleView)
+            if self._in_visual_mode:
+                start, end = view.get_visual_range()
+                status.set_position(
+                    self._current_book,
+                    self._current_chapter,
+                    start,
+                    end if end != start else None,
+                )
+            else:
+                status.set_position(
+                    self._current_book,
+                    self._current_chapter,
+                    view.current_verse,
+                )
+            status.set_module(self._current_module)
 
-        status.set_module(self._current_module)
-
-    def _do_search(self, query: str) -> None:
-        """Perform search and navigate to first result."""
+    def _do_chapter_search(self, query: str) -> None:
+        """Search within current chapter (Ctrl+F)."""
         if not query:
             return
 
-        results = self._backend.search(query)
+        self._chapter_search_query = query
+        self._search_matches = []
+        self._search_match_index = 0
 
-        if results:
-            first = results[0]
-            self.query_one("#status-bar", StatusBar).show_message(
-                f"Gevonden: {len(results)} resultaten"
-            )
-            self._current_book = first.book
-            self._current_chapter = first.chapter
-            self._load_chapter()
+        # Get segments from active view
+        view = self._get_active_view()
+        segments = view._segments
 
-            view = self.query_one("#bible-view", BibleView)
-            view.move_to_verse(first.verse)
+        # Find verses containing the query
+        query_lower = query.lower()
+        for seg in segments:
+            if query_lower in seg.text.lower():
+                self._search_matches.append(seg.verse)
+
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._search_matches:
+            # Set search query for highlighting on active view
             view.set_search_query(query)
-            self._update_status()
-        else:
-            self.query_one("#status-bar", StatusBar).show_message(
-                f"Geen resultaten voor '{query}'"
+            # Also highlight on other pane if linked
+            if self._in_parallel_mode and self._panes_linked:
+                parallel = self.query_one("#parallel-view", ParallelView)
+                other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+                other.set_search_query(query)
+
+            # Go to first match
+            first_verse = self._search_matches[0]
+            self._goto_verse(first_verse)
+            status.show_message(
+                f"Gevonden: {len(self._search_matches)} matches - n/N voor volgende/vorige"
             )
+        else:
+            status.show_message(f"Niet gevonden: '{query}'")
 
     def _handle_command_result(self, result) -> None:
         """Handle command execution result."""
@@ -522,8 +996,13 @@ class SwordApp(App):
             self._current_chapter = data.get("chapter", self._current_chapter)
             self._load_chapter()
             if data.get("verse"):
-                view = self.query_one("#bible-view", BibleView)
-                view.move_to_verse(data["verse"])
+                if self._in_parallel_mode:
+                    parallel = self.query_one("#parallel-view", ParallelView)
+                    parallel.query_one("#left-view", BibleView).move_to_verse(data["verse"])
+                    parallel.query_one("#right-view", BibleView).move_to_verse(data["verse"])
+                else:
+                    view = self.query_one("#bible-view", BibleView)
+                    view.move_to_verse(data["verse"])
             self._update_status()
         elif action == "set_module":
             data = result.data or {}
