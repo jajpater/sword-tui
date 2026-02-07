@@ -1,33 +1,141 @@
-# Sword-TUI
+# sword-tui
 
-A Bible TUI (Text User Interface) application using the SWORD/diatheke backend.
+Een terminal-based Bible reader voor SWORD modules, gebouwd met [Textual](https://textual.textualize.io/).
 
 ## Features
 
-- **Bible Viewer** - Browse chapters with vim-style keybindings
-- **Module Picker** - Choose from installed SWORD modules
-- **KWIC Search** - Keyword-in-context search with split-screen preview
-- **Parallel View** - Compare two translations side by side
-- **Bookmarks** - Save and load bookmarks
-- **Export** - Export passages to text or HTML
+- **Vim-style navigatie** - j/k voor verzen, ]/[ voor hoofdstukken, }/{ voor boeken
+- **KWIC zoeken** - Zoek door de hele bijbel met keyword-in-context resultaten
+- **Parallel view** - Twee vertalingen naast elkaar vergelijken
+- **Meerdere zoekmodi** - KWIC alleen, referenties+preview, of KWIC+preview
+- **Bookmarks** - Sla favoriete passages op
+- **Export** - Kopieer tekst naar klembord (plain text of HTML)
+- **Module support** - Werkt met alle geïnstalleerde SWORD modules
 
-## Installation
+## Installatie
 
-### NixOS (recommended)
+### NixOS / Home Manager
+
+Voeg toe aan je `flake.nix` inputs:
+
+```nix
+{
+  inputs = {
+    sword-tui.url = "github:jajpater/sword-tui";
+  };
+}
+```
+
+En in je home-manager configuratie:
+
+```nix
+{ inputs, pkgs, ... }:
+{
+  home.packages = [
+    inputs.sword-tui.packages.${pkgs.system}.default
+  ];
+}
+```
+
+Of draai direct:
 
 ```bash
 nix run github:jajpater/sword-tui
 ```
 
-Or add to your flake inputs:
+### Vereisten
 
+- `diatheke` (onderdeel van SWORD project)
+- Minimaal één SWORD module geïnstalleerd
+
+Op NixOS:
 ```nix
-{
-  inputs.sword-tui.url = "github:jajpater/sword-tui";
-}
+environment.systemPackages = [ pkgs.sword pkgs.diatheke ];
 ```
 
-### Development
+## Gebruik
+
+Start de applicatie:
+
+```bash
+sword-tui
+```
+
+### Sneltoetsen
+
+Druk `?` voor volledige help. Belangrijkste toetsen:
+
+| Toets | Actie |
+|-------|-------|
+| `j`/`k` | Vorige/volgende vers |
+| `]`/`[` | Volgende/vorige hoofdstuk |
+| `}`/`{` | Volgende/vorig boek |
+| `gg` | Eerste vers |
+| `G` | Laatste vers |
+| `r` | Ga naar referentie |
+| `:<num>` | Ga naar vers nummer |
+| `/` | KWIC zoeken |
+| `Ctrl+F` | Zoeken in hoofdstuk |
+| `P` | Toggle parallel view |
+| `m` | Module picker |
+| `v` | Visual mode (selecteren) |
+| `y` | Kopieer selectie |
+| `b` | Bookmark |
+| `?` | Help |
+| `q` | Afsluiten |
+
+### Parallel View
+
+| Toets | Actie |
+|-------|-------|
+| `P` | Toggle parallel view |
+| `h`/`l` | Focus links/rechts pane |
+| `Tab` | Wissel pane focus |
+| `L` | Koppel/ontkoppel panes |
+| `m` | Module picker (actieve pane) |
+| `M` | Module picker (rechter pane) |
+
+### Zoekmodi
+
+In zoekresultaten, druk `S` om te wisselen tussen:
+
+1. **KWIC alleen** - Één pane met alle resultaten en context
+2. **Refs + preview** - Referentielijst links, hoofdstuk preview rechts
+3. **KWIC + preview** - KWIC lijst links, hoofdstuk preview rechts
+
+Met `m` kun je de preview module wisselen om resultaten in een andere vertaling te bekijken.
+
+### Commando's
+
+| Commando | Beschrijving |
+|----------|--------------|
+| `:quit` `:q` | Afsluiten |
+| `:module <naam>` | Wissel module |
+| `:goto <ref>` | Ga naar referentie |
+| `:export <ref>` | Exporteer naar klembord |
+| `:bm add <naam>` | Bookmark toevoegen |
+| `:bm list` | Bookmarks tonen |
+| `:bm del <naam>` | Bookmark verwijderen |
+| `:searchmode [1-3]` | Zoekmodus instellen |
+| `:help` | Help tonen |
+
+## Configuratie
+
+Bookmarks worden opgeslagen in `~/.config/sword-tui/bookmarks.json`.
+
+## SWORD Modules
+
+Installeer SWORD modules met je package manager of download ze van [CrossWire](https://crosswire.org/sword/modules/).
+
+Op NixOS kun je modules installeren met:
+
+```nix
+environment.systemPackages = [
+  (pkgs.sword.withModules (m: [ m.KJV m.DutSVV ]))
+];
+```
+
+## Development
 
 ```bash
 # Enter development shell
@@ -40,47 +148,6 @@ python -m sword_tui
 pytest
 ```
 
-## Keybindings
-
-| Key | Action |
-|-----|--------|
-| `j`/`k` | Scroll up/down |
-| `Ctrl+d`/`Ctrl+u` | Page down/up |
-| `]`/`[` | Next/previous chapter |
-| `}`/`{` | Next/previous book |
-| `g` | Go to reference |
-| `/` | KWIC search |
-| `P` | Toggle parallel view |
-| `m` | Module picker |
-| `:` | Command mode |
-| `y` | Yank (copy) current chapter |
-| `q` | Quit |
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `:quit`, `:q` | Exit application |
-| `:module <name>` | Switch to module |
-| `:goto <ref>` | Go to reference (e.g., `:goto Gen 1:5`) |
-| `:export [--fmt=txt\|html] <ref>` | Export passage |
-| `:bookmark add <name>` | Add bookmark |
-| `:bookmark list` | List bookmarks |
-| `:bookmark del <name>` | Delete bookmark |
-| `:help` | Show help |
-
-## Requirements
-
-- Python 3.11+
-- [diatheke](https://wiki.crosswire.org/Frontends:Diatheke) - SWORD CLI frontend
-- SWORD modules installed (e.g., DutSVV, KJV)
-
-## Configuration
-
-Configuration files are stored in `~/.config/sword-tui/`:
-
-- `bookmarks.json` - Saved bookmarks
-
-## License
+## Licentie
 
 MIT
