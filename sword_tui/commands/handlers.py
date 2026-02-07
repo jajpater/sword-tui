@@ -62,26 +62,60 @@ class CommandHandler:
 
     def _cmd_help(self, cmd: ParsedCommand) -> CommandResult:
         """Handle :help command."""
-        help_text = """
-Commando's:
-  :quit, :q         - Afsluiten
-  :module <name>    - Wissel module
-  :export <ref>     - Exporteer tekst
-  :bookmark add <n> - Bookmark toevoegen
-  :bookmark list    - Bookmarks tonen
-  :bookmark del <n> - Bookmark verwijderen
-  :goto <ref>       - Ga naar referentie
+        help_text = """NAVIGATIE
+  j/k         Vorige/volgende vers
+  gg          Eerste vers
+  G           Laatste vers
+  ]/[         Volgende/vorige hoofdstuk
+  }/{         Volgende/vorig boek
+  Ctrl+D/U    Pagina omlaag/omhoog
+  r           Ga naar referentie (boek picker)
+  :<nummer>   Ga naar vers nummer
 
-Toetsen:
-  j/k     - Scroll
-  ]/[     - Volgende/vorige hoofdstuk
-  }/{     - Volgende/vorig boek
-  g       - Ga naar
-  /       - Zoeken
-  P       - Parallel view
-  m       - Module picker
-  y       - Kopieer
-  q       - Afsluiten
+ZOEKEN
+  /           KWIC zoeken in hele bijbel
+  Ctrl+F      Zoeken in huidig hoofdstuk
+  n/N         Volgende/vorige match
+
+IN ZOEKRESULTATEN
+  j/k         Navigeer resultaten
+  Ctrl+D/U    Pagina omlaag/omhoog
+  m           Preview module wisselen
+  S           Toggle zoekmodus
+  Enter       Ga naar resultaat
+  Esc         Sluiten
+
+ZOEKMODI (S of :searchmode)
+  1           KWIC alleen (één pane)
+  2           Referenties + preview
+  3           KWIC + preview
+
+PARALLEL VIEW
+  P           Toggle parallel view
+  h/l         Focus links/rechts pane
+  Tab         Wissel pane focus
+  L           Koppel/ontkoppel panes
+  m           Module picker (actieve pane)
+  M           Module picker (rechter pane)
+
+SELECTIE & KOPIËREN
+  v           Visual mode (selecteer verzen)
+  y           Kopieer selectie/vers
+  Y           Kopieer heel hoofdstuk
+  b           Bookmark huidige positie
+
+BOOKMARKS
+  '           Toon bookmarks
+  :bm add <n> Bookmark toevoegen met naam
+  :bm list    Alle bookmarks tonen
+  :bm del <n> Bookmark verwijderen
+
+COMMANDO'S
+  :quit :q    Afsluiten
+  :module     Module picker / wissel module
+  :export     Exporteer tekst naar klembord
+  :goto <ref> Ga naar referentie
+  :help       Deze hulp tonen
 """
         return CommandResult(success=True, message=help_text)
 
@@ -306,6 +340,46 @@ Toetsen:
             action="search",
             data={"query": query}
         )
+
+    def _cmd_searchmode(self, cmd: ParsedCommand) -> CommandResult:
+        """Handle :searchmode command.
+
+        Usage:
+            :searchmode [1|2|3]
+            1 = KWIC only (single pane with all snippets)
+            2 = Refs + preview (default)
+            3 = KWIC + preview
+        """
+        if not cmd.args:
+            # Show current mode
+            current = self.app._search_display_mode
+            mode_names = {
+                1: "KWIC (alleen lijst)",
+                2: "Referenties + preview",
+                3: "KWIC + preview",
+            }
+            return CommandResult(
+                success=True,
+                message=f"Huidige zoekmodus: {current} - {mode_names[current]}"
+            )
+
+        try:
+            mode = int(cmd.first_arg)
+            if mode not in (1, 2, 3):
+                return CommandResult(
+                    success=False,
+                    message="Ongeldige modus. Gebruik 1, 2 of 3."
+                )
+            return CommandResult(
+                success=True,
+                action="set_search_mode",
+                data={"mode": mode}
+            )
+        except ValueError:
+            return CommandResult(
+                success=False,
+                message="Gebruik: :searchmode [1|2|3]"
+            )
 
     def get_bookmarks(self) -> List[Bookmark]:
         """Get all bookmarks."""

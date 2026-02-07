@@ -7,6 +7,7 @@ from sword_tui.widgets.book_picker import BookPicker
 from sword_tui.widgets.command_input import CommandInput
 from sword_tui.widgets.module_picker import ModulePicker
 from sword_tui.widgets.status_bar import StatusBar
+from sword_tui.widgets.search_view import SearchView
 
 __all__ = [
     "BibleView",
@@ -16,4 +17,5 @@ __all__ = [
     "CommandInput",
     "ModulePicker",
     "StatusBar",
+    "SearchView",
 ]

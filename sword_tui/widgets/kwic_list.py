@@ -44,18 +44,23 @@ class KWICList(ListView):
         super().__init__(**kwargs)
         self._results: List[SearchHit] = []
         self._query = ""
+        self._show_snippets = True
         self._visual_mode = False
         self._visual_start = 0
 
-    def set_results(self, results: List[SearchHit], query: str) -> None:
+    def set_results(
+        self, results: List[SearchHit], query: str, show_snippets: bool = True
+    ) -> None:
         """Set the search results to display.
 
         Args:
             results: List of search hits
             query: The search query (for highlighting)
+            show_snippets: Whether to show KWIC snippets or just references
         """
         self._results = results
         self._query = query
+        self._show_snippets = show_snippets
         self._render_results()
 
     def clear_results(self) -> None:
@@ -127,9 +132,10 @@ class KWICList(ListView):
         """Render results as ListItems."""
         self.clear()
 
-        for i, hit in enumerate(self._results):
+        for hit in self._results:
             text = self._format_result(hit)
-            item = ListItem(Static(text), id=f"kwic-{i}")
+            # Don't use IDs to avoid DuplicateIds error on re-render
+            item = ListItem(Static(text))
             self.append(item)
 
         if self._results:
@@ -148,6 +154,13 @@ class KWICList(ListView):
 
         # Reference
         ref = f"{hit.book} {hit.chapter}:{hit.verse}"
+
+        if not self._show_snippets:
+            # Mode 2: Only show reference
+            text.append(ref, style="bold cyan")
+            return text
+
+        # Mode 1 and 3: Show KWIC with highlighted match
         text.append(ref.ljust(20), style="bold cyan")
 
         # Snippet with highlighting
@@ -182,7 +195,7 @@ class KWICList(ListView):
             if match_end < len(snippet):
                 text.append(snippet[match_end:])
         else:
-            text.append("(no preview)", style="dim")
+            text.append("(laden...)", style="dim italic")
 
         return text
 

@@ -107,12 +107,18 @@ class DiathekeBackend:
         raw = self._lookup_raw(ref)
         return self._parse_lookup(canonical, chapter, raw)
 
-    def search(self, query: str, search_type: str = "phrase") -> List[SearchHit]:
+    def search(
+        self,
+        query: str,
+        search_type: str = "phrase",
+        fetch_snippets: bool = True,
+    ) -> List[SearchHit]:
         """Search for text in the current module.
 
         Args:
             query: Search query
             search_type: "phrase", "regex", or "multiword"
+            fetch_snippets: Whether to fetch full verse text for each hit
 
         Returns:
             List of SearchHit results
@@ -133,7 +139,7 @@ class DiathekeBackend:
             if proc.returncode != 0:
                 return []
 
-            return self._parse_search(proc.stdout, query)
+            return self._parse_search(proc.stdout, query, fetch_snippets)
         except (subprocess.TimeoutExpired, OSError):
             return []
 
@@ -191,63 +197,100 @@ class DiathekeBackend:
 
         return segments
 
-    def _parse_search(self, text: str, query: str) -> List[SearchHit]:
-        """Parse diatheke search output."""
-        hits: List[SearchHit] = []
-        lines = text.strip().splitlines()
+    def _parse_search(
+        self, text: str, query: str, fetch_snippets: bool = True
+    ) -> List[SearchHit]:
+        """Parse diatheke search output.
 
-        for line in lines:
+        Args:
+            text: Raw diatheke output
+            query: The search query
+            fetch_snippets: Whether to fetch verse text for each hit
+
+        Returns:
+            List of SearchHit results
+        """
+        hits: List[SearchHit] = []
+
+        # Diatheke output format:
+        # Entries containing "query"-- Book Ch:Vs
+        # Book Ch:Vs ; Book Ch:Vs ; Book Ch:Vs ; ...
+        # -- N matches total (Module)
+
+        for line in text.strip().splitlines():
             line = line.strip()
-            if not line or line.startswith("--"):
+            if not line:
                 continue
 
-            # Parse reference
-            match = _SEARCH_REF.match(line)
-            if match:
-                raw_book = match.group(1).strip()
-                chapter = int(match.group(2))
-                verse = int(match.group(3))
-
-                # Resolve book name
-                book = DIATHEKE_TO_CANON.get(raw_book)
-                if not book:
-                    book = resolve_alias(raw_book) or raw_book
-
-                hits.append(SearchHit(
-                    book=book,
-                    chapter=chapter,
-                    verse=verse,
-                    snippet="",
-                    match_start=0,
-                    match_end=0,
-                ))
-
-        # Fetch verse text for each hit (limited to avoid slowdown)
-        for i, hit in enumerate(hits[:50]):
-            seg = self.lookup_verse(hit.book, hit.chapter, hit.verse)
-            if seg:
-                # Find query match position
-                text_lower = seg.text.lower()
-                query_lower = query.lower()
-                pos = text_lower.find(query_lower)
-                if pos >= 0:
-                    hits[i] = SearchHit(
-                        book=hit.book,
-                        chapter=hit.chapter,
-                        verse=hit.verse,
-                        snippet=seg.text,
-                        match_start=pos,
-                        match_end=pos + len(query),
-                    )
+            # Skip header and footer lines
+            if line.startswith("Entries containing") or line.startswith("--"):
+                # But the header line may contain the first result after "--"
+                if "--" in line and not line.startswith("--"):
+                    # Extract part after "--"
+                    parts = line.split("--", 1)
+                    if len(parts) > 1:
+                        line = parts[1].strip()
+                    else:
+                        continue
                 else:
-                    hits[i] = SearchHit(
-                        book=hit.book,
-                        chapter=hit.chapter,
-                        verse=hit.verse,
-                        snippet=seg.text,
+                    continue
+
+            # Split by " ; " to handle multiple references per line
+            refs = line.split(" ; ")
+
+            for ref in refs:
+                ref = ref.strip()
+                if not ref:
+                    continue
+
+                # Parse reference: "Book Chapter:Verse"
+                match = _SEARCH_REF.match(ref)
+                if match:
+                    raw_book = match.group(1).strip()
+                    chapter = int(match.group(2))
+                    verse = int(match.group(3))
+
+                    # Resolve book name
+                    book = DIATHEKE_TO_CANON.get(raw_book)
+                    if not book:
+                        book = resolve_alias(raw_book) or raw_book
+
+                    hits.append(SearchHit(
+                        book=book,
+                        chapter=chapter,
+                        verse=verse,
+                        snippet="",
                         match_start=0,
                         match_end=0,
-                    )
+                    ))
+
+        # Fetch verse text for each hit if requested
+        if fetch_snippets:
+            for i, hit in enumerate(hits):
+                seg = self.lookup_verse(hit.book, hit.chapter, hit.verse)
+                if seg:
+                    # Find query match position
+                    text_lower = seg.text.lower()
+                    query_lower = query.lower()
+                    pos = text_lower.find(query_lower)
+                    if pos >= 0:
+                        hits[i] = SearchHit(
+                            book=hit.book,
+                            chapter=hit.chapter,
+                            verse=hit.verse,
+                            snippet=seg.text,
+                            match_start=pos,
+                            match_end=pos + len(query),
+                        )
+                    else:
+                        hits[i] = SearchHit(
+                            book=hit.book,
+                            chapter=hit.chapter,
+                            verse=hit.verse,
+                            snippet=seg.text,
+                            match_start=0,
+                            match_end=0,
+                        )
 
         return hits
 

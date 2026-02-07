@@ -116,8 +116,8 @@ class StatusBar(Static):
                 ("j/k", "vers"),
                 ("]/[", "hfdst"),
                 ("r", "ref"),
-                ("^F", "zoek"),
-                ("P", "parallel"),
+                ("/", "zoek"),
+                ("?", "help"),
             ]
         elif self._mode == "visual":
             return [
@@ -128,7 +128,7 @@ class StatusBar(Static):
             ]
         elif self._mode == "parallel":
             return [
-                ("h/l", "pane"),
+                ("Tab", "pane"),
                 ("m/M", "module"),
                 ("L", "link"),
                 ("P", "sluiten"),
@@ -137,6 +137,14 @@ class StatusBar(Static):
             return [
                 ("Enter", "run"),
                 ("Esc", "stop"),
+            ]
+        elif self._mode == "search":
+            return [
+                ("j/k", "navigeer"),
+                ("^D/^U", "pagina"),
+                ("m", "module"),
+                ("S", "modus"),
+                ("Enter", "ga naar"),
             ]
         else:
             return []

@@ -22,6 +22,7 @@ from sword_tui.widgets import (
     CommandInput,
     ModulePicker,
     ParallelView,
+    SearchView,
     StatusBar,
 )
 
@@ -57,8 +58,11 @@ class SwordApp(App):
         Binding("P", "toggle_parallel", "Parallel view", show=False),
         Binding("h", "focus_left_pane", "Left pane", show=False),
         Binding("l", "focus_right_pane", "Right pane", show=False),
+        Binding("tab", "toggle_pane_focus", "Switch pane", show=False),
         Binding("M", "secondary_module_picker", "Secondary module", show=False),
         Binding("L", "toggle_pane_link", "Link/unlink panes", show=False),
+        Binding("S", "toggle_search_mode", "Toggle search display mode", show=False),
+        Binding("question_mark", "show_help", "Show help", show=False),
     ]
 
     def __init__(self) -> None:
@@ -74,9 +78,14 @@ class SwordApp(App):
         self._in_visual_mode = False
         self._in_picker_mode = False
         self._in_parallel_mode = False
+        self._in_search_mode = False  # KWIC search mode
         self._picking_secondary_module = False
+        self._picking_search_preview_module = False
         self._panes_linked = True  # Whether parallel panes show same passage
         self._active_pane = "left"  # Which pane is active: "left" or "right"
+
+        # Search display mode: 1=KWIC only, 2=refs+preview (default), 3=KWIC+preview
+        self._search_display_mode = 2
 
         # Right pane state (when unlinked)
         self._right_book = "Genesis"
@@ -86,6 +95,8 @@ class SwordApp(App):
         self._chapter_search_query = ""
         self._search_matches: list[int] = []  # Verse numbers with matches
         self._search_match_index = 0
+        self._search_preview_module = ""  # Module for search preview pane
+        self._search_preview_backend: Optional[DiathekeBackend] = None
 
         # Key sequence buffer (for gg)
         self._key_buffer = ""
@@ -114,6 +125,8 @@ class SwordApp(App):
             yield BibleView(id="bible-view")
         # Parallel view (two panes, initially hidden)
         yield ParallelView(id="parallel-view")
+        # Search view (KWIC, initially hidden)
+        yield SearchView(id="search-view")
         yield CommandInput(
             commands=["quit", "help", "module", "export", "goto"],
             id="command-input",
@@ -124,9 +137,10 @@ class SwordApp(App):
         """Initialize the app after mounting."""
         self._command_handler = CommandHandler(self)
 
-        # Hide command input and parallel view initially
+        # Hide command input, parallel view, and search view initially
         self.query_one("#command-input").display = False
         self.query_one("#parallel-view").display = False
+        self.query_one("#search-view").display = False
 
         # Load initial content
         self._load_chapter()
@@ -140,6 +154,35 @@ class SwordApp(App):
             return
 
         char = event.character
+        key = event.key
+
+        # Handle search mode keys
+        if self._in_search_mode:
+            if key == "escape":
+                event.stop()
+                self._close_search_mode()
+            elif char == "j" or key == "down":
+                event.stop()
+                self._search_move_down()
+            elif char == "k" or key == "up":
+                event.stop()
+                self._search_move_up()
+            elif key == "pagedown" or key == "ctrl+d":
+                event.stop()
+                self._search_page_down()
+            elif key == "pageup" or key == "ctrl+u":
+                event.stop()
+                self._search_page_up()
+            elif key == "enter":
+                event.stop()
+                self._search_goto_result()
+            elif char == "S":
+                event.stop()
+                self.action_toggle_search_mode()
+            elif char == "m":
+                event.stop()
+                self._search_preview_module_picker()
+            return
 
         # Handle gg sequence (go to first verse)
         if char == "g":
@@ -160,11 +203,9 @@ class SwordApp(App):
             event.stop()
             self._enter_command_mode()
         elif char == "/":
-            # Reserved for future KWIC search
+            # KWIC search
             event.stop()
-            self.query_one("#status-bar", StatusBar).show_message(
-                "KWIC zoeken komt later - gebruik Ctrl+F voor hoofdstuk"
-            )
+            self._enter_kwic_search_mode()
 
     # ==================== Actions ====================
 
@@ -280,7 +321,7 @@ class SwordApp(App):
     def action_goto(self) -> None:
         """Open goto dialog."""
         self._in_picker_mode = True
-        picker = BookPicker(id="book-picker")
+        picker = BookPicker()
         self.mount(picker)
         picker.focus()
 
@@ -514,7 +555,7 @@ class SwordApp(App):
         """Open module picker for primary module."""
         self._in_picker_mode = True
         self._picking_secondary_module = False
-        picker = ModulePicker(current_module=self._current_module, id="module-picker")
+        picker = ModulePicker(current_module=self._current_module, )
         self.mount(picker)
         picker.focus()
 
@@ -527,7 +568,7 @@ class SwordApp(App):
             return
         self._in_picker_mode = True
         self._picking_secondary_module = True
-        picker = ModulePicker(current_module=self._secondary_module, id="module-picker")
+        picker = ModulePicker(current_module=self._secondary_module, )
         self.mount(picker)
         picker.focus()
 
@@ -580,6 +621,14 @@ class SwordApp(App):
             self._active_pane = "right"
             self.query_one("#parallel-view", ParallelView).focus_right()
             self._update_status()
+
+    def action_toggle_pane_focus(self) -> None:
+        """Toggle focus between panes (Tab)."""
+        if self._in_parallel_mode:
+            if self._active_pane == "left":
+                self.action_focus_right_pane()
+            else:
+                self.action_focus_left_pane()
 
     def action_search_chapter(self) -> None:
         """Search within current chapter (Ctrl+F)."""
@@ -635,6 +684,34 @@ class SwordApp(App):
             right.set_current_verse(left.current_verse)
         else:
             status.show_message("Panes ontkoppeld - navigeer onafhankelijk")
+
+    def action_toggle_search_mode(self) -> None:
+        """Toggle search display mode (S)."""
+        # Cycle through modes: 1 -> 2 -> 3 -> 1
+        self._search_display_mode = (self._search_display_mode % 3) + 1
+
+        mode_names = {
+            1: "KWIC (alleen lijst)",
+            2: "Referenties + preview",
+            3: "KWIC + preview",
+        }
+        status = self.query_one("#status-bar", StatusBar)
+        status.show_message(f"Zoekmodus: {mode_names[self._search_display_mode]}")
+
+        # Update search view if currently in search mode
+        if self._in_search_mode:
+            search_view = self.query_one("#search-view", SearchView)
+            search_view.set_display_mode(self._search_display_mode)
+
+    def action_show_help(self) -> None:
+        """Show help (?)."""
+        # Execute the :help command
+        if self._command_handler:
+            from sword_tui.commands.parser import ParsedCommand
+            result = self._command_handler._cmd_help(ParsedCommand(name="help"))
+            if result.message:
+                # Show help in a notification
+                self.notify(result.message, title="Help", timeout=30)
 
     def _load_parallel_chapter(self) -> None:
         """Load current chapter into both parallel panes."""
@@ -714,10 +791,143 @@ class SwordApp(App):
         cmd_input = self.query_one("#command-input", CommandInput)
         cmd_input.display = False
         self.query_one("#status-bar", StatusBar).display = True
-        if self._in_parallel_mode:
-            self.query_one("#parallel-view", ParallelView).focus_left()
+        if self._in_search_mode:
+            self.query_one("#search-view", SearchView).focus()
+        elif self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            if self._active_pane == "right":
+                parallel.focus_right()
+            else:
+                parallel.focus_left()
         else:
             self.query_one("#bible-scroll").focus()
+
+    # ==================== KWIC Search Mode ====================
+
+    def _enter_kwic_search_mode(self) -> None:
+        """Enter KWIC search mode - show search input."""
+        self._in_command_mode = True
+        self.query_one("#status-bar", StatusBar).display = False
+        cmd_input = self.query_one("#command-input", CommandInput)
+        cmd_input.display = True
+        cmd_input.reset("/")
+        cmd_input.focus()
+
+    def _open_search_view(self, query: str) -> None:
+        """Open the search view with results."""
+        status = self.query_one("#status-bar", StatusBar)
+        status.show_message(f"Zoeken naar '{query}'...")
+
+        # Always fetch snippets so user can switch between modes freely
+        results = self._backend.search(query, fetch_snippets=True)
+
+        if not results:
+            status.show_message(f"Geen resultaten voor '{query}'")
+            return
+
+        # Hide other views, show search view
+        self.query_one("#bible-scroll").display = False
+        self.query_one("#parallel-view").display = False
+        self.query_one("#search-view").display = True
+
+        # Populate search view with current display mode
+        search_view = self.query_one("#search-view", SearchView)
+        search_view.set_display_mode(self._search_display_mode)
+        search_view.set_results(results, query)
+
+        # Load preview context for first result (for modes 2 and 3)
+        if results and self._search_display_mode >= 2:
+            self._update_search_preview(results[0])
+
+        self._in_search_mode = True
+        status.set_mode("search")
+        status.show_message(f"{len(results)} resultaten voor '{query}'")
+
+    def _close_search_mode(self) -> None:
+        """Close search mode and return to normal view."""
+        self._in_search_mode = False
+
+        # Hide search view
+        self.query_one("#search-view").display = False
+        self.query_one("#search-view", SearchView).clear_results()
+
+        # Restore appropriate view
+        if self._in_parallel_mode:
+            self.query_one("#parallel-view").display = True
+            self.query_one("#parallel-view", ParallelView).focus_left()
+            self.query_one("#status-bar", StatusBar).set_mode("parallel")
+        else:
+            self.query_one("#bible-scroll").display = True
+            self.query_one("#bible-scroll").focus()
+            self.query_one("#status-bar", StatusBar).set_mode("normal")
+
+    def _search_move_up(self) -> None:
+        """Move to previous search result."""
+        search_view = self.query_one("#search-view", SearchView)
+        search_view.move_up()
+        hit = search_view.get_current_hit()
+        if hit:
+            self._update_search_preview(hit)
+
+    def _search_move_down(self) -> None:
+        """Move to next search result."""
+        search_view = self.query_one("#search-view", SearchView)
+        search_view.move_down()
+        hit = search_view.get_current_hit()
+        if hit:
+            self._update_search_preview(hit)
+
+    def _search_page_down(self) -> None:
+        """Move down 10 search results."""
+        search_view = self.query_one("#search-view", SearchView)
+        for _ in range(10):
+            search_view.move_down()
+        hit = search_view.get_current_hit()
+        if hit:
+            self._update_search_preview(hit)
+
+    def _search_page_up(self) -> None:
+        """Move up 10 search results."""
+        search_view = self.query_one("#search-view", SearchView)
+        for _ in range(10):
+            search_view.move_up()
+        hit = search_view.get_current_hit()
+        if hit:
+            self._update_search_preview(hit)
+
+    def _search_goto_result(self) -> None:
+        """Go to the selected search result."""
+        search_view = self.query_one("#search-view", SearchView)
+        hit = search_view.get_current_hit()
+        if hit:
+            self._close_search_mode()
+            self._current_book = hit.book
+            self._current_chapter = hit.chapter
+            self._load_chapter()
+            self._get_active_view().move_to_verse(hit.verse)
+            self._get_active_view().set_search_query(self._chapter_search_query)
+            self._update_status()
+
+    def _search_preview_module_picker(self) -> None:
+        """Open module picker for search preview pane."""
+        self._in_picker_mode = True
+        self._picking_search_preview_module = True
+        current = self._search_preview_module or self._current_module
+        picker = ModulePicker(current_module=current, )
+        self.mount(picker)
+        picker.focus()
+
+    def _update_search_preview(self, hit) -> None:
+        """Update the search preview pane with chapter context."""
+        # Use search preview backend if available, otherwise use main backend
+        backend = self._search_preview_backend or self._backend
+        module = self._search_preview_module or self._current_module
+
+        # Load the chapter for preview
+        segments = backend.lookup_chapter(hit.book, hit.chapter)
+        search_view = self.query_one("#search-view", SearchView)
+        title = f"{hit.book} {hit.chapter} [{module}]"
+        search_view.update_preview_context(segments, title)
 
     # ==================== Event Handlers ====================
 
@@ -730,7 +940,12 @@ class SwordApp(App):
         command = event.command
         prefix = event.prefix
 
-        if prefix == "?":
+        if prefix == "/":
+            # KWIC search
+            if command.strip():
+                self._chapter_search_query = command  # Save for highlighting
+                self._open_search_view(command)
+        elif prefix == "?":
             # Chapter search (Ctrl+F)
             self._do_chapter_search(command)
         elif prefix == ":":
@@ -778,7 +993,19 @@ class SwordApp(App):
         """Handle module selection from picker."""
         self._close_picker()
 
-        if self._picking_secondary_module:
+        if self._picking_search_preview_module:
+            # Update search preview module
+            self._search_preview_module = event.module.name
+            self._search_preview_backend = DiathekeBackend(self._search_preview_module)
+            # Refresh preview with new module
+            search_view = self.query_one("#search-view", SearchView)
+            hit = search_view.get_current_hit()
+            if hit:
+                self._update_search_preview(hit)
+            self.query_one("#status-bar", StatusBar).show_message(
+                f"Preview module: {self._search_preview_module}"
+            )
+        elif self._picking_secondary_module:
             # Update secondary module for parallel view
             self._secondary_module = event.module.name
             self._secondary_backend = DiathekeBackend(self._secondary_module)
@@ -798,10 +1025,18 @@ class SwordApp(App):
     def _close_picker(self) -> None:
         """Close any open picker."""
         self._in_picker_mode = False
+        self._picking_search_preview_module = False
+        self._picking_secondary_module = False
         for picker in self.query("BookPicker, ModulePicker"):
             picker.remove()
-        if self._in_parallel_mode:
-            self.query_one("#parallel-view", ParallelView).focus_left()
+        if self._in_search_mode:
+            self.query_one("#search-view", SearchView).focus()
+        elif self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            if self._active_pane == "right":
+                parallel.focus_right()
+            else:
+                parallel.focus_left()
         else:
             self.query_one("#bible-scroll").focus()
 
@@ -1015,6 +1250,22 @@ class SwordApp(App):
             self.action_module_picker()
         elif action == "export":
             self._handle_export(result.data or {})
+        elif action == "set_search_mode":
+            data = result.data or {}
+            mode = data.get("mode", 2)
+            self._search_display_mode = mode
+            mode_names = {
+                1: "KWIC (alleen lijst)",
+                2: "Referenties + preview",
+                3: "KWIC + preview",
+            }
+            self.query_one("#status-bar", StatusBar).show_message(
+                f"Zoekmodus: {mode_names[mode]}"
+            )
+            # Update search view if currently in search mode
+            if self._in_search_mode:
+                search_view = self.query_one("#search-view", SearchView)
+                search_view.set_display_mode(mode)
         elif result.message:
             self.query_one("#status-bar", StatusBar).show_message(result.message)
 
