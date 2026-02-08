@@ -32,6 +32,14 @@
             "--prefix" "PATH" ":" "${pkgs.sword}/bin"
           ];
 
+          postInstall = ''
+            # Install desktop file
+            install -Dm644 $src/desktop/sword-tui.desktop $out/share/applications/sword-tui.desktop
+
+            # Install icon
+            install -Dm644 $src/desktop/sword-tui.svg $out/share/icons/hicolor/scalable/apps/sword-tui.svg
+          '';
+
           meta = with pkgs.lib; {
             description = "Bible TUI application using SWORD/diatheke backend";
             homepage = "https://github.com/jajpater/sword-tui";

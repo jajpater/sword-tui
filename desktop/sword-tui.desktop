@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Sword TUI
+Comment=Bible TUI application using SWORD/diatheke backend
+Exec=sword-tui
+Icon=sword-tui
+Terminal=true
+Type=Application
+Categories=Education;Utility;
+Keywords=bible;sword;diatheke;scripture;

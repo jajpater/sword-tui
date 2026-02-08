@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Optie 3: Minimalistisch zwaard (Word of God) -->
+
+  <!-- Achtergrond gradient -->
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a365d"/>
+      <stop offset="100%" style="stop-color:#2c5282"/>
+    </linearGradient>
+    <linearGradient id="blade" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#e2e8f0"/>
+      <stop offset="50%" style="stop-color:#f7fafc"/>
+      <stop offset="100%" style="stop-color:#cbd5e0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="4" y="4" width="120" height="120" rx="16" fill="url(#bg)"/>
+
+  <!-- Zwaard kling -->
+  <polygon points="64,12 72,24 72,70 56,70 56,24" fill="url(#blade)"/>
+  <polygon points="64,12 56,24 72,24" fill="#f7fafc"/>
+
+  <!-- Groef in kling -->
+  <line x1="64" y1="28" x2="64" y2="65" stroke="#a0aec0" stroke-width="2"/>
+
+  <!-- Guard/crossguard -->
+  <rect x="40" y="70" width="48" height="8" rx="2" fill="#d69e2e"/>
+  <ellipse cx="64" cy="74" rx="6" ry="4" fill="#b7791f"/>
+
+  <!-- Handvat -->
+  <rect x="56" y="78" width="16" height="28" rx="3" fill="#744210"/>
+  <line x1="60" y1="82" x2="60" y2="102" stroke="#5d3a0a" stroke-width="2"/>
+  <line x1="68" y1="82" x2="68" y2="102" stroke="#5d3a0a" stroke-width="2"/>
+
+  <!-- Pommel -->
+  <circle cx="64" cy="110" r="8" fill="#d69e2e"/>
+  <circle cx="64" cy="110" r="4" fill="#b7791f"/>
+</svg>
