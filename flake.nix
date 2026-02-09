@@ -66,7 +66,6 @@
             python3Packages.pyperclip
             python3Packages.pytest
             python3Packages.pytest-asyncio
-            sword  # provides diatheke
           ];
         };
       }

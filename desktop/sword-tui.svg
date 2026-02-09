@@ -1,30 +1,108 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 128 128"
+   version="1.1"
+   id="svg10"
+   sodipodi:docname="sword-tui.svg"
+   inkscape:version="1.4.3 (fcd0343856, 2026-01-01)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs10" />
+  <sodipodi:namedview
+     id="namedview10"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="7.6875"
+     inkscape:cx="63.934959"
+     inkscape:cy="63.934959"
+     inkscape:window-width="2536"
+     inkscape:window-height="1376"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg10" />
   <!-- Modern boek met terminal elementen -->
-
   <!-- Achtergrond -->
-  <rect x="4" y="4" width="120" height="120" rx="16" fill="#0d1117"/>
-
+  <rect
+     x="4"
+     y="4"
+     width="120"
+     height="120"
+     rx="16"
+     fill="#0d1117"
+     id="rect1" />
   <!-- Terminal window -->
-  <rect x="14" y="14" width="100" height="100" rx="8" fill="#161b22"/>
-
+  <rect
+     x="14"
+     y="14"
+     width="100"
+     height="100"
+     rx="8"
+     fill="#161b22"
+     id="rect2" />
   <!-- Terminal header -->
-  <rect x="14" y="14" width="100" height="20" rx="8" fill="#21262d"/>
-  <circle cx="28" cy="24" r="5" fill="#f85149"/>
-  <circle cx="44" cy="24" r="5" fill="#f0c000"/>
-  <circle cx="60" cy="24" r="5" fill="#3fb950"/>
-
-  <!-- Open boek in terminal -->
-  <path d="M34 50 L64 58 L64 100 L34 92 Z" fill="#58a6ff"/>
-  <path d="M94 50 L64 58 L64 100 L94 92 Z" fill="#388bfd"/>
-
-  <!-- Pagina lijnen links -->
-  <line x1="40" y1="60" x2="60" y2="65" stroke="#0d1117" stroke-width="2"/>
-  <line x1="40" y1="68" x2="60" y2="73" stroke="#0d1117" stroke-width="2"/>
-  <line x1="40" y1="76" x2="60" y2="81" stroke="#0d1117" stroke-width="2"/>
-
-  <!-- Pagina lijnen rechts -->
-  <line x1="68" y1="65" x2="88" y2="60" stroke="#0d1117" stroke-width="2"/>
-  <line x1="68" y1="73" x2="88" y2="68" stroke="#0d1117" stroke-width="2"/>
-  <line x1="68" y1="81" x2="88" y2="76" stroke="#0d1117" stroke-width="2"/>
+  <rect
+     x="14"
+     y="14"
+     width="100"
+     height="20"
+     rx="8"
+     fill="#21262d"
+     id="rect3" />
+  <circle
+     cx="28"
+     cy="24"
+     r="5"
+     fill="#f85149"
+     id="circle3" />
+  <circle
+     cx="44"
+     cy="24"
+     r="5"
+     fill="#f0c000"
+     id="circle4" />
+  <circle
+     cx="60"
+     cy="24"
+     r="5"
+     fill="#3fb950"
+     id="circle5" />
+  <!-- Open boek (Darius-Dan stijl) geschaald naar terminal -->
+  <g
+     id="g1"
+     transform="matrix(1.4660653,0,0,1.4660653,-28.850786,-37.961481)">
+    <path
+       fill="#58a6ff"
+       d="m 42.704675,55.102642 c -0.825,0.12 -1.77,0.27 -2.1,0.345 l -0.6,0.12 -0.045,2.73 -0.03,2.73 h -2.55 -2.55 v 18.375 18.375 h 28.65 28.65 v -18.375 -18.375 h -2.55 -2.55 l -0.03,-2.745 -0.045,-2.73 -1.5,-0.285 c -1.92,-0.345 -8.07,-0.42 -9.825,-0.12 -4.41,0.78 -8.82,2.61 -11.505,4.785 l -0.645,0.51 -0.63,-0.51 c -1.59,-1.275 -4.665,-2.88 -7.095,-3.69 -2.775,-0.915 -4.77,-1.23 -8.325,-1.29 -2.265,-0.045 -3.675,0 -4.725,0.15 z"
+       id="path5"
+       style="stroke-width:0.015" />
+    <path
+       fill="#c9d1d9"
+       d="m 48.524675,56.977642 c 2.34,0.165 4.44,0.57 6.465,1.215 1.845,0.6 5.025,2.19 6.315,3.165 l 1.05,0.795 0.045,15.735 c 0.03,13.065 0,15.705 -0.165,15.57 -0.54,-0.465 -3.81,-1.92 -5.55,-2.505 -3.765,-1.245 -7.185,-1.815 -11.835,-1.98 l -2.82,-0.09 v -15.795 -15.78 l 0.465,-0.105 c 0.255,-0.06 1.215,-0.15 2.145,-0.225 0.915,-0.06 1.695,-0.12 1.74,-0.12 0.045,-0.015 1.005,0.045 2.145,0.12 z"
+       id="path6"
+       style="stroke-width:0.015" />
+    <path
+       fill="#388bfd"
+       d="m 89.899594,63.153658 c 0,0.81 0,32.25 0,32.4 0,0.15 -2.61,0.195 -12.555,0.195 h -12.57 l 0.375,-0.3 c 0.705,-0.555 3.975,-2.085 5.625,-2.625 4.005,-1.32 7.215,-1.785 12.27,-1.8 h 3.855 v -14.07 -14.055 h 1.5 c 1.335,0 1.5,0.03 1.5,0.255 z"
+       id="path9"
+       style="stroke-width:0.015" />
+    <path
+       fill="#adbac7"
+       d="m 82.694675,57.052642 c 0.705,0.045 1.5,0.12 1.755,0.165 l 0.48,0.09 v 15.795 15.78 l -2.805,0.09 c -1.56,0.045 -3.63,0.195 -4.62,0.33 -4.47,0.585 -9.18,2.04 -12.045,3.72 l -0.93,0.54 v -15.66 -15.66 l 0.645,-0.51 c 2.445,-1.965 6.06,-3.57 9.705,-4.305 1.65,-0.33 4.5,-0.585 5.775,-0.51 0.42,0.03 1.335,0.09 2.04,0.135 z"
+       id="path7"
+       style="stroke-width:0.015" />
+    <path
+       fill="#388bfd"
+       d="m 39.539431,77.078577 v 14.07 h 3.795 c 4.59,0 7.35,0.36 10.98,1.38 2.565,0.735 5.805,2.145 6.975,3.045 0.375,0.285 0.24,0.3 -12.18,0.3 -9.96,0 -12.57,-0.045 -12.57,-0.195 0,-0.15 0,-31.59 0,-32.4 0,-0.225 0.165,-0.255 1.5,-0.255 h 1.5 z"
+       id="path8"
+       style="stroke-width:0.015" />
+  </g>
 </svg>
