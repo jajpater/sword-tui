@@ -10,8 +10,8 @@ CONFIG_DIR = Path.home() / ".config" / "sword-tui"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # Default dictionary modules for Strong's lookups
-DEFAULT_GREEK_MODULES = ["StrongsGreek", "AbbottSmithStrongs", "MLStrong"]
-DEFAULT_HEBREW_MODULES = ["StrongsHebrew", "BDBGlosses_Strongs"]
+DEFAULT_GREEK_MODULES = ["StrongsGreek", "StrongsRealGreek", "AbbottSmithStrongs"]
+DEFAULT_HEBREW_MODULES = ["StrongsHebrew", "StrongsRealHebrew", "BDBGlosses_Strongs"]
 
 
 @dataclass
