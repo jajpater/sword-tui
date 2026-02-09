@@ -129,13 +129,16 @@ class CommentaryBackend:
             proc = subprocess.run(
                 ["diatheke", "-b", mod, "-k", ref],
                 capture_output=True,
-                text=True,
                 timeout=10,
             )
             if proc.returncode != 0:
                 return None
 
-            raw_text = proc.stdout
+            # Decode with error handling - some modules use Latin-1
+            try:
+                raw_text = proc.stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                raw_text = proc.stdout.decode("latin-1", errors="replace")
             if not raw_text.strip():
                 return None
 

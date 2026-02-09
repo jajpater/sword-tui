@@ -180,13 +180,18 @@ class DiathekeBackend:
             proc = subprocess.run(
                 ["diatheke", "-b", self.module, "-s", search_type, "-k", query],
                 capture_output=True,
-                text=True,
                 timeout=30,
             )
             if proc.returncode != 0:
                 return []
 
-            return self._parse_search(proc.stdout, query, fetch_snippets)
+            # Decode with error handling - some modules use Latin-1
+            try:
+                output = proc.stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                output = proc.stdout.decode("latin-1", errors="replace")
+
+            return self._parse_search(output, query, fetch_snippets)
         except (subprocess.TimeoutExpired, OSError):
             return []
 

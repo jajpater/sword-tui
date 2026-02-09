@@ -261,13 +261,16 @@ class CrossRefBackend:
             proc = subprocess.run(
                 ["diatheke", "-b", module, "-k", ref],
                 capture_output=True,
-                text=True,
                 timeout=10,
             )
             if proc.returncode != 0:
                 return []
 
-            output = proc.stdout
+            # Decode with error handling - some modules use Latin-1
+            try:
+                output = proc.stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                output = proc.stdout.decode("latin-1", errors="replace")
 
             # Try scripRef tags first (common in commentaries)
             refs = self._parse_scripref_tags(output)
