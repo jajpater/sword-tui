@@ -68,8 +68,6 @@ class SwordApp(App):
         Binding("question_mark", "show_help", "Show help", show=False),
         Binding("s", "toggle_strongs", "Toggle Strong's", show=False),
         Binding("F", "toggle_footnotes", "Toggle footnotes", show=False),
-        Binding("ctrl+l", "strongs_next_word", "Next Strong's word", show=False),
-        Binding("ctrl+h", "strongs_prev_word", "Previous Strong's word", show=False),
     ]
 
     def __init__(self) -> None:
@@ -97,11 +95,12 @@ class SwordApp(App):
         # Search display mode: 1=KWIC only, 2=refs+preview (default), 3=KWIC+preview
         self._search_display_mode = 2
 
-        # Diatheke filter flags
-        self._filters = DiathekeFilters()
+        # Diatheke filter flags (named _diatheke_filters to avoid conflict with Textual's _filters)
+        self._diatheke_filters = DiathekeFilters()
 
         # Strong's lookup mode state
         self._in_strongs_mode = False  # Whether Strong's lookup mode is active
+        self._strongs_pane_focused = False  # Whether the strongs dictionary pane has focus
         self._strongs_word_index = 0  # Index of currently selected word with Strong's
         self._strongs_words_in_verse: list[int] = []  # Indices of words with Strong's in current verse
         self._dictionary_backend = DictionaryBackend()
@@ -129,7 +128,7 @@ class SwordApp(App):
 
         # Backend
         self._backend = DiathekeBackend(self._current_module)
-        self._backend.set_filters(self._filters)
+        self._backend.set_filters(self._diatheke_filters)
 
         # Command handler (initialized after mount)
         self._command_handler: Optional[CommandHandler] = None
@@ -172,7 +171,7 @@ class SwordApp(App):
         self.query_one("#strongs-view").display = False
 
         # Initialize status bar with filters
-        self.query_one("#status-bar", StatusBar).set_filters(self._filters)
+        self.query_one("#status-bar", StatusBar).set_filters(self._diatheke_filters)
 
         # Load initial content
         self._load_chapter()
@@ -187,6 +186,39 @@ class SwordApp(App):
 
         char = event.character
         key = event.key
+
+        # Handle Strong's mode keys
+        if self._in_strongs_mode:
+            if key == "escape":
+                event.stop()
+                self.action_toggle_strongs()  # Exit strongs mode
+                return
+            # Tab, Ctrl+h, Ctrl+l for pane switching
+            elif key == "tab" or key == "ctrl+h" or key == "ctrl+l":
+                event.stop()
+                self._toggle_strongs_pane_focus()
+                return
+            # h/l for word navigation (vim-style)
+            elif char == "l" or char == "]":
+                event.stop()
+                self._strongs_next_word()
+                return
+            elif char == "h" or char == "[":
+                event.stop()
+                self._strongs_prev_word()
+                return
+            elif char == "y" and self._strongs_pane_focused:
+                event.stop()
+                self._yank_strongs_entry()
+                return
+            elif (char == "j" or key == "down") and self._strongs_pane_focused:
+                event.stop()
+                self._scroll_strongs_down()
+                return
+            elif (char == "k" or key == "up") and self._strongs_pane_focused:
+                event.stop()
+                self._scroll_strongs_up()
+                return
 
         # Handle search mode keys
         if self._in_search_mode:
@@ -242,7 +274,12 @@ class SwordApp(App):
     # ==================== Actions ====================
 
     def action_next_verse(self) -> None:
-        """Move to next verse."""
+        """Move to next verse (j key) - in Strong's mode with dict pane: scroll down."""
+        # In Strong's mode with dictionary pane focused, scroll dictionary
+        if self._in_strongs_mode and self._strongs_pane_focused:
+            self._scroll_strongs_down()
+            return
+
         view = self._get_active_view()
         if not view.next_verse():
             self.action_next_chapter()
@@ -260,7 +297,12 @@ class SwordApp(App):
         self._update_status()
 
     def action_prev_verse(self) -> None:
-        """Move to previous verse."""
+        """Move to previous verse (k key) - in Strong's mode with dict pane: scroll up."""
+        # In Strong's mode with dictionary pane focused, scroll dictionary
+        if self._in_strongs_mode and self._strongs_pane_focused:
+            self._scroll_strongs_up()
+            return
+
         view = self._get_active_view()
         if not view.prev_verse():
             # Go to previous chapter
@@ -447,6 +489,11 @@ class SwordApp(App):
 
     def action_yank(self) -> None:
         """Copy current verse or visual selection."""
+        # In Strong's mode with dictionary pane focused, copy dictionary entry
+        if self._in_strongs_mode and self._strongs_pane_focused:
+            self._yank_strongs_entry()
+            return
+
         status = self.query_one("#status-bar", StatusBar)
 
         if self._in_parallel_mode:
@@ -664,7 +711,7 @@ class SwordApp(App):
                     break
 
             self._secondary_backend = DiathekeBackend(self._secondary_module)
-            self._secondary_backend.set_filters(self._filters)
+            self._secondary_backend.set_filters(self._diatheke_filters)
             self._in_parallel_mode = True
 
             # Hide single view, show parallel view
@@ -677,14 +724,24 @@ class SwordApp(App):
             status.set_mode("parallel")
 
     def action_focus_left_pane(self) -> None:
-        """Focus the left pane in parallel view."""
+        """Focus the left pane (h key) - in Strong's mode: previous word."""
+        # In Strong's mode, h navigates to previous word
+        if self._in_strongs_mode:
+            self._strongs_prev_word()
+            return
+
         if self._in_parallel_mode:
             self._active_pane = "left"
             self.query_one("#parallel-view", ParallelView).focus_left()
             self._update_status()
 
     def action_focus_right_pane(self) -> None:
-        """Focus the right pane in parallel view."""
+        """Focus the right pane (l key) - in Strong's mode: next word."""
+        # In Strong's mode, l navigates to next word
+        if self._in_strongs_mode:
+            self._strongs_next_word()
+            return
+
         if self._in_parallel_mode:
             self._active_pane = "right"
             self.query_one("#parallel-view", ParallelView).focus_right()
@@ -692,6 +749,12 @@ class SwordApp(App):
 
     def action_toggle_pane_focus(self) -> None:
         """Toggle focus between panes (Tab)."""
+        # In Strong's mode, toggle between bible and dictionary pane
+        if self._in_strongs_mode:
+            self._toggle_strongs_pane_focus()
+            return
+
+        # In parallel mode, toggle between left and right pane
         if self._in_parallel_mode:
             if self._active_pane == "left":
                 self.action_focus_right_pane()
@@ -783,14 +846,14 @@ class SwordApp(App):
 
     def action_toggle_strongs(self) -> None:
         """Toggle Strong's numbers filter and lookup mode (s)."""
-        self._filters.toggle_strongs()
+        self._diatheke_filters.toggle_strongs()
         status = self.query_one("#status-bar", StatusBar)
-        status.set_filters(self._filters)
+        status.set_filters(self._diatheke_filters)
 
-        if self._filters.strongs:
+        if self._diatheke_filters.strongs:
             # Enter Strong's lookup mode
             self._in_strongs_mode = True
-            status.show_message("Strong's modus aan - Ctrl+h/l voor navigatie")
+            status.show_message("Strong's modus aan - h/l voor navigatie, Tab voor pane")
             status.set_mode("strongs")
 
             # Show the strongs view panel
@@ -822,18 +885,18 @@ class SwordApp(App):
 
     def action_toggle_footnotes(self) -> None:
         """Toggle footnotes filter (F)."""
-        self._filters.toggle_footnotes()
+        self._diatheke_filters.toggle_footnotes()
         status = self.query_one("#status-bar", StatusBar)
-        if self._filters.footnotes:
+        if self._diatheke_filters.footnotes:
             status.show_message("Voetnoten aan")
         else:
             status.show_message("Voetnoten uit")
-        status.set_filters(self._filters)
+        status.set_filters(self._diatheke_filters)
         # Reload current chapter to reflect filter change
         self._load_chapter()
 
-    def action_strongs_next_word(self) -> None:
-        """Navigate to next word with Strong's number (Ctrl+l)."""
+    def _strongs_next_word(self) -> None:
+        """Navigate to next word with Strong's number (l key)."""
         if not self._in_strongs_mode:
             return
 
@@ -850,8 +913,8 @@ class SwordApp(App):
         self._strongs_word_index = (self._strongs_word_index + 1) % len(self._strongs_words_in_verse)
         self._lookup_current_strongs()
 
-    def action_strongs_prev_word(self) -> None:
-        """Navigate to previous word with Strong's number (Ctrl+h)."""
+    def _strongs_prev_word(self) -> None:
+        """Navigate to previous word with Strong's number (h key)."""
         if not self._in_strongs_mode:
             return
 
@@ -925,12 +988,68 @@ class SwordApp(App):
             f"{word.text}[{strongs_num}] ({self._strongs_word_index + 1}/{word_count})"
         )
 
+    def _toggle_strongs_pane_focus(self) -> None:
+        """Toggle logical focus between bible view and strongs dictionary pane.
+
+        Note: We don't actually change widget focus - we just track which pane
+        is logically active for key handling. This ensures all keys go through
+        the App's on_key handler.
+        """
+        self._strongs_pane_focused = not self._strongs_pane_focused
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._strongs_pane_focused:
+            status.show_message("Woordenboek pane - j/k scroll, y kopieer")
+        else:
+            status.show_message("Bijbel pane - h/l Strong's navigatie")
+
+    def _scroll_strongs_down(self) -> None:
+        """Scroll the strongs view down."""
+        scroll = self.query_one("#strongs-view", StrongsView).query_one("#strongs-scroll")
+        scroll.scroll_down()
+
+    def _scroll_strongs_up(self) -> None:
+        """Scroll the strongs view up."""
+        scroll = self.query_one("#strongs-view", StrongsView).query_one("#strongs-scroll")
+        scroll.scroll_up()
+
+    def _yank_strongs_entry(self) -> None:
+        """Copy the current Strong's entry to clipboard."""
+        strongs_view = self.query_one("#strongs-view", StrongsView)
+        entries = strongs_view.entries
+        status = self.query_one("#status-bar", StatusBar)
+
+        if not entries:
+            status.show_message("Geen entry om te kopiëren")
+            return
+
+        # Format entries for copying
+        lines = []
+        for entry in entries:
+            lines.append(f"=== {entry.module} ===")
+            lines.append(entry.title)
+            if entry.pronunciation:
+                lines.append(f"Pronunciation: {entry.pronunciation}")
+            lines.append("")
+            if entry.definition:
+                lines.append(entry.definition)
+            lines.append("")
+
+        text = "\n".join(lines)
+
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+            status.show_message(f"Gekopieerd: {strongs_view.current_number}")
+        except ImportError:
+            status.show_message("pyperclip niet beschikbaar")
+
     def _load_parallel_chapter(self) -> None:
         """Load current chapter into both parallel panes."""
         parallel = self.query_one("#parallel-view", ParallelView)
 
         # Set Strong's display flag
-        parallel.set_show_strongs(self._filters.strongs)
+        parallel.set_show_strongs(self._diatheke_filters.strongs)
 
         # Left pane: primary module with current book/chapter
         left_title = f"{self._current_book} {self._current_chapter}"
@@ -1224,7 +1343,7 @@ class SwordApp(App):
             # Update secondary module for parallel view
             self._secondary_module = event.module.name
             self._secondary_backend = DiathekeBackend(self._secondary_module)
-            self._secondary_backend.set_filters(self._filters)
+            self._secondary_backend.set_filters(self._diatheke_filters)
             if self._in_parallel_mode:
                 self._load_parallel_chapter()
             self._update_status()
@@ -1339,7 +1458,7 @@ class SwordApp(App):
         )
 
         view = self.query_one("#bible-view", BibleView)
-        view.set_show_strongs(self._filters.strongs)
+        view.set_show_strongs(self._diatheke_filters.strongs)
         view.update_content(segments, f"{self._current_book} {self._current_chapter}")
 
         scroll = self.query_one("#bible-scroll", VerticalScroll)

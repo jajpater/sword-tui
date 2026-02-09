@@ -28,8 +28,68 @@ _TITLE = re.compile(r'<title>([^<]+)</title>')
 _ORTH = re.compile(r'<orth[^>]*>([^<]+)</orth>')
 _ORTH_TRANS = re.compile(r'<orth[^>]*type="trans"[^>]*>([^<]+)</orth>')
 _PRON = re.compile(r'<pron[^>]*>([^<]+)</pron>')
-_DEF = re.compile(r'<def>([^<]+)</def>')
+_DEF = re.compile(r'<def>(.*?)</def>', re.DOTALL)  # Match content with nested tags
 _HTML_TAG = re.compile(r'<[^>]+>')
+# Pattern for foreign language tags (Hebrew/Greek words in BDB)
+_FOREIGN = re.compile(r'<foreign[^>]*>([^<]+)</foreign>')
+# Patterns for cleaning definition content
+_REF_TAG = re.compile(r'<ref[^>]*>([^<]*)</ref>')
+_HI_TAG = re.compile(r'<hi[^>]*>([^<]*)</hi>')
+_FOREIGN_TAG = re.compile(r'<foreign[^>]*>([^<]*)</foreign>')
+_SENSE_TAG = re.compile(r'<sense[^>]*>(.*?)</sense>', re.DOTALL)
+_NOTE_TAG = re.compile(r'<note[^>]*>(.*?)</note>', re.DOTALL)
+_LB_TAG = re.compile(r'<lb\s*/?>')
+_WHITESPACE = re.compile(r'\s+')
+
+
+def _clean_definition(raw_def: str) -> str:
+    """Clean XML tags from definition text for human-readable output.
+
+    Args:
+        raw_def: Raw definition text with XML tags
+
+    Returns:
+        Cleaned plain text definition
+    """
+    text = raw_def
+
+    # Replace <ref target="...">H433</ref> with just the reference text
+    text = _REF_TAG.sub(r'\1', text)
+
+    # Replace <hi rend="italic">word</hi> with just the word
+    text = _HI_TAG.sub(r'\1', text)
+
+    # Replace <foreign>word</foreign> with just the word
+    text = _FOREIGN_TAG.sub(r'\1', text)
+
+    # Replace <sense n="1"> with "1." for readability
+    def format_sense(match: re.Match) -> str:
+        content = match.group(1)
+        return content
+
+    text = _SENSE_TAG.sub(format_sense, text)
+
+    # Remove <note> tags and their content (footnotes within definitions)
+    text = _NOTE_TAG.sub('', text)
+
+    # Replace <lb/> line breaks with actual newlines
+    text = _LB_TAG.sub('\n', text)
+
+    # Strip any remaining HTML/XML tags
+    text = _HTML_TAG.sub(' ', text)
+
+    # Unescape HTML entities
+    text = html.unescape(text)
+
+    # Normalize whitespace (but preserve intentional newlines)
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        cleaned = _WHITESPACE.sub(' ', line).strip()
+        if cleaned:
+            cleaned_lines.append(cleaned)
+
+    return '\n'.join(cleaned_lines)
 
 
 class DictionaryBackend:
@@ -90,12 +150,27 @@ class DictionaryBackend:
             DictionaryEntry if found, None otherwise
         """
         try:
+            # Different modules use different key formats:
+            # - StrongsHebrew/StrongsGreek: use number only (e.g., "430")
+            # - BDBGlosses_Strongs: use full key with prefix (e.g., "H430")
+            # Try number-only first (more common), then full key with prefix
             proc = subprocess.run(
                 ["diatheke", "-b", module, "-k", number],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
+            # Verify we got the right entry (check title matches requested number)
+            lookup_key = strongs_number.upper()  # e.g., "H430" or "G25"
+            if (proc.returncode != 0 or "Entry not found" in proc.stdout
+                    or f"<title>{lookup_key}</title>" not in proc.stdout):
+                # Try with full key (for BDBGlosses_Strongs and similar)
+                proc = subprocess.run(
+                    ["diatheke", "-b", module, "-k", lookup_key],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
             if proc.returncode != 0:
                 return None
 
@@ -145,6 +220,12 @@ class DictionaryBackend:
                         greek_word = orth.strip()
                         break
 
+            # If no <orth>, try <foreign> tag (used by BDBGlosses_Strongs)
+            if not greek_word:
+                foreign_matches = _FOREIGN.findall(entry_content)
+                if foreign_matches:
+                    greek_word = foreign_matches[0].strip()
+
             if trans_matches:
                 transliteration = trans_matches[0].strip()
 
@@ -153,10 +234,17 @@ class DictionaryBackend:
             if pron_match:
                 pronunciation = pron_match.group(1).strip()
 
-            # Extract definition
+            # Extract definition and clean XML tags
             def_match = _DEF.search(entry_content)
             if def_match:
-                definition = def_match.group(1).strip()
+                definition = _clean_definition(def_match.group(1))
+            else:
+                # No <def> tag - use entire content minus title/foreign as definition
+                # This handles BDBGlosses_Strongs format with <sense> tags
+                content_for_def = entry_content
+                # Remove title
+                content_for_def = _TITLE.sub('', content_for_def)
+                definition = _clean_definition(content_for_def)
 
         # If XML parsing didn't work, try to extract from plain text
         if not greek_word and not definition:

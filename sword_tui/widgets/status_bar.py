@@ -169,9 +169,10 @@ class StatusBar(Static):
             ]
         elif self._mode == "strongs":
             return [
-                ("^h/^l", "woord"),
-                ("j/k", "vers"),
-                ("M", "modules"),
+                ("h/l", "woord"),
+                ("Tab", "pane"),
+                ("j/k", "scroll"),
+                ("y", "copy"),
                 ("s", "sluiten"),
             ]
         else:

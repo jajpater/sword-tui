@@ -1,5 +1,7 @@
 """Strong's dictionary view widget for displaying stacked dictionary entries."""
 
+import html
+import re
 from typing import List
 
 from rich.text import Text
@@ -9,6 +11,9 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from sword_tui.backend.dictionary import DictionaryEntry
+
+# Pattern for stripping HTML tags in fallback display
+_HTML_TAG = re.compile(r'<[^>]+>')
 
 
 class DictionaryEntryWidget(Static):
@@ -47,8 +52,11 @@ class DictionaryEntryWidget(Static):
         if self._entry.definition:
             text.append(self._entry.definition)
         elif self._entry.raw_text:
-            # Fallback to raw text
-            text.append(self._entry.raw_text, style="dim")
+            # Fallback to cleaned raw text
+            plain = _HTML_TAG.sub(' ', self._entry.raw_text)
+            plain = html.unescape(plain)
+            plain = re.sub(r'\s+', ' ', plain).strip()
+            text.append(plain, style="dim")
 
         self.update(text)
 
@@ -120,7 +128,7 @@ class StrongsView(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static("Strong's Lookup", id="strongs-header")
-        with VerticalScroll(id="strongs-scroll"):
+        with VerticalScroll(id="strongs-scroll", can_focus=True):
             yield Vertical(id="strongs-content")
 
     def update_entries(
