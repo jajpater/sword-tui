@@ -16,7 +16,7 @@ class ModuleInfo:
 
 
 def get_installed_modules() -> List[ModuleInfo]:
-    """Get list of installed SWORD modules using diatheke -M.
+    """Get list of installed SWORD modules using diatheke -b system -k modulelist.
 
     Returns:
         List of ModuleInfo for installed modules
@@ -26,7 +26,7 @@ def get_installed_modules() -> List[ModuleInfo]:
 
     try:
         proc = subprocess.run(
-            ["diatheke", "-M"],
+            ["diatheke", "-b", "system", "-k", "modulelist"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -62,8 +62,8 @@ def _parse_module_list(output: str) -> List[ModuleInfo]:
             current_type = line[:-1]
             continue
 
-        # Module entry (has leading whitespace and contains :)
-        if line.startswith(" ") and " : " in line:
+        # Module entry (contains " : " separator)
+        if " : " in line:
             parts = line.strip().split(" : ", 1)
             if len(parts) == 2:
                 name = parts[0].strip()

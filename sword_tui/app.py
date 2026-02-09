@@ -9,6 +9,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Header
 
 from sword_tui.backend import DiathekeBackend, get_installed_modules
+from sword_tui.config import get_config
 from sword_tui.commands import CommandHandler, parse_command
 from sword_tui.data import (
     BOOK_ORDER,
@@ -68,10 +69,13 @@ class SwordApp(App):
     def __init__(self) -> None:
         super().__init__()
 
+        # Load config
+        self._config = get_config()
+
         # State
         self._current_book = "Genesis"
         self._current_chapter = 1
-        self._current_module = "DutSVV"
+        self._current_module = self._config.default_module or "DutSVV"
 
         # Mode flags
         self._in_command_mode = False
@@ -111,10 +115,13 @@ class SwordApp(App):
         # Command handler (initialized after mount)
         self._command_handler: Optional[CommandHandler] = None
 
-        # Detect available modules
+        # Detect available modules and validate configured module
         modules = get_installed_modules()
         if modules:
-            self._current_module = modules[0].name
+            module_names = [m.name for m in modules]
+            # Use configured module if valid, otherwise fall back to first available
+            if self._current_module not in module_names:
+                self._current_module = modules[0].name
             self._backend.set_module(self._current_module)
 
     def compose(self) -> ComposeResult:
