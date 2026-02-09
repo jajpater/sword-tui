@@ -8,7 +8,7 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Header
 
-from sword_tui.backend import DiathekeBackend, get_installed_modules, DiathekeFilters, DictionaryBackend
+from sword_tui.backend import DiathekeBackend, get_installed_modules, DiathekeFilters, DictionaryBackend, CrossRefBackend, CommentaryBackend
 from sword_tui.config import get_config
 from sword_tui.commands import CommandHandler, parse_command
 from sword_tui.data import (
@@ -21,12 +21,16 @@ from sword_tui.widgets import (
     BibleView,
     BookPicker,
     CommandInput,
+    CrossRefView,
+    CrossRefSelected,
     DictModulePicker,
     ModulePicker,
     ParallelView,
     SearchView,
     StatusBar,
     StrongsView,
+    StudyView,
+    StudyGotoRef,
 )
 
 
@@ -68,6 +72,8 @@ class SwordApp(App):
         Binding("question_mark", "show_help", "Show help", show=False),
         Binding("s", "toggle_strongs", "Toggle Strong's", show=False),
         Binding("F", "toggle_footnotes", "Toggle footnotes", show=False),
+        Binding("x", "toggle_crossrefs", "Toggle cross-references", show=False),
+        Binding("T", "toggle_study", "Toggle study mode", show=False),
     ]
 
     def __init__(self) -> None:
@@ -107,6 +113,16 @@ class SwordApp(App):
         self._active_greek_modules: list[str] = self._config.strongs_greek_modules.copy()
         self._active_hebrew_modules: list[str] = self._config.strongs_hebrew_modules.copy()
         self._picking_dict_modules = False
+
+        # Cross-reference mode state
+        self._in_crossref_mode = False
+        self._crossref_backend = CrossRefBackend()
+
+        # Study mode state (3-pane view)
+        self._in_study_mode = False
+        self._commentary_backend = CommentaryBackend()
+        self._study_commentary_module = "DutKant"  # Default commentary
+        self._study_active_pane = 0  # 0=bible, 1=commentary, 2=crossrefs
 
         # Right pane state (when unlinked)
         self._right_book = "Genesis"
@@ -154,6 +170,10 @@ class SwordApp(App):
         yield SearchView(id="search-view")
         # Strong's dictionary view (initially hidden)
         yield StrongsView(id="strongs-view")
+        # Cross-references view (initially hidden)
+        yield CrossRefView(id="crossref-view")
+        # Study view - 3-pane interface (initially hidden)
+        yield StudyView(id="study-view")
         yield CommandInput(
             commands=["quit", "help", "module", "export", "goto"],
             id="command-input",
@@ -164,11 +184,13 @@ class SwordApp(App):
         """Initialize the app after mounting."""
         self._command_handler = CommandHandler(self)
 
-        # Hide command input, parallel view, search view, and strongs view initially
+        # Hide command input, parallel view, search view, strongs view, crossref view and study view initially
         self.query_one("#command-input").display = False
         self.query_one("#parallel-view").display = False
         self.query_one("#search-view").display = False
         self.query_one("#strongs-view").display = False
+        self.query_one("#crossref-view").display = False
+        self.query_one("#study-view").display = False
 
         # Initialize status bar with filters
         self.query_one("#status-bar", StatusBar).set_filters(self._diatheke_filters)
@@ -218,6 +240,87 @@ class SwordApp(App):
             elif (char == "k" or key == "up") and self._strongs_pane_focused:
                 event.stop()
                 self._scroll_strongs_up()
+                return
+
+        # Handle cross-reference mode keys
+        if self._in_crossref_mode:
+            if key == "escape":
+                event.stop()
+                self.action_toggle_crossrefs()  # Exit crossref mode
+                return
+            elif char == "j" or key == "down":
+                event.stop()
+                crossref_view = self.query_one("#crossref-view", CrossRefView)
+                crossref_view.action_next_item()
+                return
+            elif char == "k" or key == "up":
+                event.stop()
+                crossref_view = self.query_one("#crossref-view", CrossRefView)
+                crossref_view.action_prev_item()
+                return
+            elif key == "enter":
+                event.stop()
+                crossref_view = self.query_one("#crossref-view", CrossRefView)
+                crossref_view.action_select_item()
+                return
+
+        # Handle study mode keys
+        if self._in_study_mode:
+            study = self.query_one("#study-view", StudyView)
+            if key == "escape":
+                event.stop()
+                self.action_toggle_study()  # Exit study mode
+                return
+            elif key == "tab":
+                event.stop()
+                study.next_pane()
+                self._study_active_pane = study.active_pane
+                pane_names = ["bijbel", "commentaar", "crossrefs"]
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Actief: {pane_names[self._study_active_pane]}"
+                )
+                return
+            elif char == "j" or key == "down":
+                event.stop()
+                if self._study_active_pane == 0:
+                    # Bible pane: next verse
+                    bp = study.bible_pane
+                    new_verse = bp.current_verse + 1
+                    bp.set_current_verse(new_verse)
+                    self._load_study_commentary(new_verse)
+                elif self._study_active_pane == 2:
+                    # Crossref pane: next ref
+                    study.crossref_pane.next_ref()
+                return
+            elif char == "k" or key == "up":
+                event.stop()
+                if self._study_active_pane == 0:
+                    # Bible pane: prev verse
+                    bp = study.bible_pane
+                    new_verse = max(1, bp.current_verse - 1)
+                    bp.set_current_verse(new_verse)
+                    self._load_study_commentary(new_verse)
+                elif self._study_active_pane == 2:
+                    # Crossref pane: prev ref
+                    study.crossref_pane.prev_ref()
+                return
+            elif key == "enter" and self._study_active_pane == 2:
+                event.stop()
+                ref = study.crossref_pane.get_selected_ref()
+                if ref:
+                    self.post_message(StudyGotoRef(ref))
+                return
+            elif char == "m":
+                event.stop()
+                # Cycle through commentary modules
+                mods = self._commentary_backend.available_modules
+                if mods:
+                    idx = mods.index(self._study_commentary_module) if self._study_commentary_module in mods else -1
+                    self._study_commentary_module = mods[(idx + 1) % len(mods)]
+                    self._load_study_commentary(study.bible_pane.current_verse)
+                    self.query_one("#status-bar", StatusBar).show_message(
+                        f"Commentaar: {self._study_commentary_module}"
+                    )
                 return
 
         # Handle search mode keys
@@ -294,6 +397,10 @@ class SwordApp(App):
             self._update_strongs_words_in_verse()
             self._lookup_current_strongs()
 
+        # Update cross-references for new verse
+        if self._in_crossref_mode:
+            self._load_crossrefs_for_current_verse()
+
         self._update_status()
 
     def action_prev_verse(self) -> None:
@@ -341,6 +448,10 @@ class SwordApp(App):
         if self._in_strongs_mode:
             self._update_strongs_words_in_verse()
             self._lookup_current_strongs()
+
+        # Update cross-references for new verse
+        if self._in_crossref_mode:
+            self._load_crossrefs_for_current_verse()
 
         self._update_status()
 
@@ -894,6 +1005,191 @@ class SwordApp(App):
         status.set_filters(self._diatheke_filters)
         # Reload current chapter to reflect filter change
         self._load_chapter()
+
+    def action_toggle_crossrefs(self) -> None:
+        """Toggle cross-references mode (x)."""
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._in_crossref_mode:
+            # Exit cross-reference mode
+            self._in_crossref_mode = False
+            status.show_message("Cross-references uit")
+
+            # Hide crossref view
+            self.query_one("#crossref-view").display = False
+            self.query_one("#crossref-view", CrossRefView).clear()
+
+            # Restore mode
+            if self._in_parallel_mode:
+                status.set_mode("parallel")
+            else:
+                status.set_mode("normal")
+        else:
+            # Enter cross-reference mode
+            if not self._crossref_backend.available:
+                status.show_message("Geen cross-ref bronnen (TSK/commentaren) beschikbaar")
+                return
+
+            self._in_crossref_mode = True
+            sources = self._crossref_backend.sources
+            source_names = ", ".join(s.module for s in sources[:3])
+            if len(sources) > 3:
+                source_names += f" (+{len(sources) - 3})"
+            status.show_message(f"Cross-refs: {source_names} | j/k nav, Enter ga naar")
+            status.set_mode("crossref")
+
+            # Show the crossref view panel
+            self.query_one("#crossref-view").display = True
+
+            # Load cross-references for current verse
+            self._load_crossrefs_for_current_verse()
+
+    def _load_crossrefs_for_current_verse(self) -> None:
+        """Load cross-references for the current verse."""
+        view = self._get_active_view()
+        segment = view.get_current_segment()
+
+        if not segment:
+            return
+
+        # Get cross-references with preview text
+        crossrefs = self._crossref_backend.lookup_with_previews(
+            segment.book,
+            segment.chapter,
+            segment.verse,
+            self._backend,
+        )
+
+        # Update the crossref view
+        crossref_view = self.query_one("#crossref-view", CrossRefView)
+        crossref_view.update_crossrefs(segment.reference, crossrefs)
+
+    def on_cross_ref_selected(self, message: CrossRefSelected) -> None:
+        """Handle cross-reference selection for navigation."""
+        xref = message.crossref
+
+        # Navigate to the selected reference
+        self._current_book = xref.book
+        self._current_chapter = xref.chapter
+        self._load_chapter()
+
+        # Go to the specific verse
+        view = self._get_active_view()
+        view.move_to_verse(xref.verse)
+
+        self._update_status()
+
+        # Reload cross-references for the new verse
+        if self._in_crossref_mode:
+            self._load_crossrefs_for_current_verse()
+
+    # ==================== Study Mode ====================
+
+    def action_toggle_study(self) -> None:
+        """Toggle 3-pane study mode (T)."""
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._in_study_mode:
+            # Exit study mode
+            self._in_study_mode = False
+            self.query_one("#study-view").display = False
+            self.query_one("#bible-scroll").display = True
+            status.show_message("Study mode uit")
+            status.set_mode("normal")
+        else:
+            # Enter study mode
+            if not self._commentary_backend.available:
+                status.show_message("Geen commentaar modules beschikbaar")
+                return
+
+            # Disable other modes
+            if self._in_parallel_mode:
+                self.action_toggle_parallel()
+            if self._in_search_mode:
+                self._close_search_mode()
+            if self._in_strongs_mode:
+                self.action_toggle_strongs()
+            if self._in_crossref_mode:
+                self.action_toggle_crossrefs()
+
+            self._in_study_mode = True
+            self.query_one("#bible-scroll").display = False
+            self.query_one("#study-view").display = True
+
+            # Load current chapter into study view
+            self._load_study_view()
+
+            mods = self._commentary_backend.available_modules
+            status.show_message(f"Study mode: {self._study_commentary_module} | Tab: panes | m: wissel commentaar")
+            status.set_mode("study")
+
+    def _load_study_view(self) -> None:
+        """Load content into all study view panes."""
+        study = self.query_one("#study-view", StudyView)
+
+        # Load bible text (pane 1)
+        verses = self._backend.lookup_chapter(self._current_book, self._current_chapter)
+        view = self._get_active_view()
+        current_verse = view.current_verse if hasattr(view, 'current_verse') else 1
+
+        study.bible_pane.update_chapter(
+            self._current_module,
+            self._current_book,
+            self._current_chapter,
+            verses,
+            current_verse,
+        )
+
+        # Load commentary (pane 2)
+        self._load_study_commentary(current_verse)
+
+    def _load_study_commentary(self, verse: int) -> None:
+        """Load commentary for the current verse in study mode."""
+        study = self.query_one("#study-view", StudyView)
+
+        entry = self._commentary_backend.lookup(
+            self._current_book,
+            self._current_chapter,
+            verse,
+            self._study_commentary_module,
+        )
+
+        study.commentary_pane.update_commentary(entry)
+
+        # Load cross-reference texts (pane 3)
+        if entry and entry.crossrefs:
+            self._load_study_crossrefs(entry.crossrefs)
+        else:
+            study.crossref_pane.clear()
+
+    def _load_study_crossrefs(self, refs: list) -> None:
+        """Load cross-reference texts into pane 3."""
+        study = self.query_one("#study-view", StudyView)
+
+        texts = []
+        for ref in refs:
+            seg = self._backend.lookup_verse(ref.book, ref.chapter, ref.verse)
+            if seg:
+                texts.append(seg.text)
+            else:
+                texts.append("")
+
+        study.crossref_pane.update_refs(refs, texts)
+
+    def on_study_goto_ref(self, message: StudyGotoRef) -> None:
+        """Handle navigation to a cross-reference from study mode."""
+        xref = message.crossref
+
+        self._current_book = xref.book
+        self._current_chapter = xref.chapter
+        self._load_study_view()
+
+        # Set verse
+        study = self.query_one("#study-view", StudyView)
+        study.bible_pane.set_current_verse(xref.verse)
+        self._load_study_commentary(xref.verse)
+
+        self._update_status()
 
     def _strongs_next_word(self) -> None:
         """Navigate to next word with Strong's number (l key)."""

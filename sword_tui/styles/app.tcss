@@ -129,6 +129,41 @@ StrongsView #strongs-scroll {
     height: 100%;
 }
 
+/* Cross-reference view (side panel) */
+#crossref-view {
+    dock: right;
+    width: 40%;
+    height: 100%;
+    border-left: solid $primary;
+}
+
+CrossRefView #crossref-header {
+    height: 1;
+    background: $primary-darken-2;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+CrossRefView #crossref-scroll {
+    height: 100%;
+}
+
+CrossRefView #crossref-status {
+    height: 1;
+    dock: bottom;
+}
+
+/* Study view (3-pane interface) */
+#study-view {
+    width: 100%;
+    height: 100%;
+}
+
+#study-view > Horizontal {
+    width: 100%;
+    height: 100%;
+}
+
 /* Pickers (modal overlays) */
 BookPicker, ModulePicker, DictModulePicker {
     align: center middle;

@@ -55,6 +55,24 @@ class SearchHit:
         return f"{self.book} {self.chapter}:{self.verse}"
 
 
+@dataclass(frozen=True)
+class CrossReference:
+    """A cross-reference to another verse."""
+
+    book: str
+    chapter: int
+    verse: int
+    verse_end: Optional[int] = None  # For ranges like "John 3:16-18"
+    preview: str = ""  # Optional preview text of the referenced verse
+
+    @property
+    def reference(self) -> str:
+        """Return formatted reference string."""
+        if self.verse_end and self.verse_end != self.verse:
+            return f"{self.book} {self.chapter}:{self.verse}-{self.verse_end}"
+        return f"{self.book} {self.chapter}:{self.verse}"
+
+
 @dataclass
 class Bookmark:
     """A saved bookmark."""

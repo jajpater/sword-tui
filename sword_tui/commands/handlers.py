@@ -110,6 +110,21 @@ BOOKMARKS
   :bm list    Alle bookmarks tonen
   :bm del <n> Bookmark verwijderen
 
+STRONG'S & CROSS-REFS
+  s           Toggle Strong's modus
+  x           Toggle cross-references
+  h/l         Strong's: vorig/volgend woord
+  j/k         Crossref: navigeer lijst
+  Tab         Wissel focus (Strong's)
+  Enter       Ga naar cross-reference
+
+STUDY MODE (3-pane)
+  T           Toggle study mode
+  Tab         Wissel pane (bijbel/commentaar/xrefs)
+  j/k         Navigeer in actieve pane
+  m           Wissel commentaar module
+  Enter       Ga naar cross-reference (in xref pane)
+
 COMMANDO'S
   :quit :q    Afsluiten
   :module     Module picker / wissel module
