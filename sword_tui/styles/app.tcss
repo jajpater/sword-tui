@@ -110,8 +110,27 @@ ParallelView .pane-header {
     text-style: bold;
 }
 
+/* Strong's view (side panel) */
+#strongs-view {
+    dock: right;
+    width: 40%;
+    height: 100%;
+    border-left: solid $primary;
+}
+
+StrongsView #strongs-header {
+    height: 1;
+    background: $primary-darken-2;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+StrongsView #strongs-scroll {
+    height: 100%;
+}
+
 /* Pickers (modal overlays) */
-BookPicker, ModulePicker {
+BookPicker, ModulePicker, DictModulePicker {
     align: center middle;
     layer: modal;
 }

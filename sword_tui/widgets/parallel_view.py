@@ -115,6 +115,15 @@ class ParallelView(Widget):
         self.query_one("#left-view", BibleView).set_search_query(query)
         self.query_one("#right-view", BibleView).set_search_query(query)
 
+    def set_show_strongs(self, show: bool) -> None:
+        """Set whether to show Strong's numbers on both panes.
+
+        Args:
+            show: Whether to show Strong's numbers
+        """
+        self.query_one("#left-view", BibleView).set_show_strongs(show)
+        self.query_one("#right-view", BibleView).set_show_strongs(show)
+
     def sync_scroll(self, scroll_y: float) -> None:
         """Synchronize scroll position of both panes.
 

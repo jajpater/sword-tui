@@ -8,7 +8,7 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Header
 
-from sword_tui.backend import DiathekeBackend, get_installed_modules
+from sword_tui.backend import DiathekeBackend, get_installed_modules, DiathekeFilters, DictionaryBackend
 from sword_tui.config import get_config
 from sword_tui.commands import CommandHandler, parse_command
 from sword_tui.data import (
@@ -21,10 +21,12 @@ from sword_tui.widgets import (
     BibleView,
     BookPicker,
     CommandInput,
+    DictModulePicker,
     ModulePicker,
     ParallelView,
     SearchView,
     StatusBar,
+    StrongsView,
 )
 
 
@@ -64,6 +66,10 @@ class SwordApp(App):
         Binding("L", "toggle_pane_link", "Link/unlink panes", show=False),
         Binding("S", "toggle_search_mode", "Toggle search display mode", show=False),
         Binding("question_mark", "show_help", "Show help", show=False),
+        Binding("s", "toggle_strongs", "Toggle Strong's", show=False),
+        Binding("F", "toggle_footnotes", "Toggle footnotes", show=False),
+        Binding("ctrl+l", "strongs_next_word", "Next Strong's word", show=False),
+        Binding("ctrl+h", "strongs_prev_word", "Previous Strong's word", show=False),
     ]
 
     def __init__(self) -> None:
@@ -91,6 +97,18 @@ class SwordApp(App):
         # Search display mode: 1=KWIC only, 2=refs+preview (default), 3=KWIC+preview
         self._search_display_mode = 2
 
+        # Diatheke filter flags
+        self._filters = DiathekeFilters()
+
+        # Strong's lookup mode state
+        self._in_strongs_mode = False  # Whether Strong's lookup mode is active
+        self._strongs_word_index = 0  # Index of currently selected word with Strong's
+        self._strongs_words_in_verse: list[int] = []  # Indices of words with Strong's in current verse
+        self._dictionary_backend = DictionaryBackend()
+        self._active_greek_modules: list[str] = self._config.strongs_greek_modules.copy()
+        self._active_hebrew_modules: list[str] = self._config.strongs_hebrew_modules.copy()
+        self._picking_dict_modules = False
+
         # Right pane state (when unlinked)
         self._right_book = "Genesis"
         self._right_chapter = 1
@@ -111,6 +129,7 @@ class SwordApp(App):
 
         # Backend
         self._backend = DiathekeBackend(self._current_module)
+        self._backend.set_filters(self._filters)
 
         # Command handler (initialized after mount)
         self._command_handler: Optional[CommandHandler] = None
@@ -134,6 +153,8 @@ class SwordApp(App):
         yield ParallelView(id="parallel-view")
         # Search view (KWIC, initially hidden)
         yield SearchView(id="search-view")
+        # Strong's dictionary view (initially hidden)
+        yield StrongsView(id="strongs-view")
         yield CommandInput(
             commands=["quit", "help", "module", "export", "goto"],
             id="command-input",
@@ -144,10 +165,14 @@ class SwordApp(App):
         """Initialize the app after mounting."""
         self._command_handler = CommandHandler(self)
 
-        # Hide command input, parallel view, and search view initially
+        # Hide command input, parallel view, search view, and strongs view initially
         self.query_one("#command-input").display = False
         self.query_one("#parallel-view").display = False
         self.query_one("#search-view").display = False
+        self.query_one("#strongs-view").display = False
+
+        # Initialize status bar with filters
+        self.query_one("#status-bar", StatusBar).set_filters(self._filters)
 
         # Load initial content
         self._load_chapter()
@@ -226,6 +251,12 @@ class SwordApp(App):
             parallel = self.query_one("#parallel-view", ParallelView)
             other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
             other.set_current_verse(view.current_verse)
+
+        # Update Strong's words for new verse
+        if self._in_strongs_mode:
+            self._update_strongs_words_in_verse()
+            self._lookup_current_strongs()
+
         self._update_status()
 
     def action_prev_verse(self) -> None:
@@ -263,6 +294,12 @@ class SwordApp(App):
             parallel = self.query_one("#parallel-view", ParallelView)
             other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
             other.set_current_verse(view.current_verse)
+
+        # Update Strong's words for new verse
+        if self._in_strongs_mode:
+            self._update_strongs_words_in_verse()
+            self._lookup_current_strongs()
+
         self._update_status()
 
     def action_next_chapter(self) -> None:
@@ -567,10 +604,33 @@ class SwordApp(App):
         picker.focus()
 
     def action_secondary_module_picker(self) -> None:
-        """Open module picker for secondary module (parallel view only)."""
+        """Open module picker for secondary module or dictionary modules."""
+        if self._in_strongs_mode:
+            # In Strong's mode, M opens dictionary module picker
+            self._in_picker_mode = True
+            self._picking_dict_modules = True
+
+            # Determine which modules based on current Strong's number
+            strongs_view = self.query_one("#strongs-view", StrongsView)
+            current_num = strongs_view.current_number
+            if current_num.startswith("H"):
+                current_modules = self._active_hebrew_modules
+                title = "Selecteer Hebreeuwse Woordenboeken"
+            else:
+                current_modules = self._active_greek_modules
+                title = "Selecteer Griekse Woordenboeken"
+
+            picker = DictModulePicker(
+                title=title,
+                current_modules=current_modules,
+            )
+            self.mount(picker)
+            picker.focus()
+            return
+
         if not self._in_parallel_mode:
             self.query_one("#status-bar", StatusBar).show_message(
-                "M werkt alleen in parallel view"
+                "M werkt alleen in parallel view of Strong's mode"
             )
             return
         self._in_picker_mode = True
@@ -604,6 +664,7 @@ class SwordApp(App):
                     break
 
             self._secondary_backend = DiathekeBackend(self._secondary_module)
+            self._secondary_backend.set_filters(self._filters)
             self._in_parallel_mode = True
 
             # Hide single view, show parallel view
@@ -720,9 +781,156 @@ class SwordApp(App):
                 # Show help in a notification
                 self.notify(result.message, title="Help", timeout=30)
 
+    def action_toggle_strongs(self) -> None:
+        """Toggle Strong's numbers filter and lookup mode (s)."""
+        self._filters.toggle_strongs()
+        status = self.query_one("#status-bar", StatusBar)
+        status.set_filters(self._filters)
+
+        if self._filters.strongs:
+            # Enter Strong's lookup mode
+            self._in_strongs_mode = True
+            status.show_message("Strong's modus aan - Ctrl+h/l voor navigatie")
+            status.set_mode("strongs")
+
+            # Show the strongs view panel
+            self.query_one("#strongs-view").display = True
+
+            # Initialize Strong's word navigation
+            self._strongs_word_index = 0
+            self._update_strongs_words_in_verse()
+
+            # Look up first Strong's word if available
+            self._lookup_current_strongs()
+        else:
+            # Exit Strong's lookup mode
+            self._in_strongs_mode = False
+            status.show_message("Strong's modus uit")
+
+            # Hide strongs view
+            self.query_one("#strongs-view").display = False
+            self.query_one("#strongs-view", StrongsView).clear()
+
+            # Restore mode
+            if self._in_parallel_mode:
+                status.set_mode("parallel")
+            else:
+                status.set_mode("normal")
+
+        # Reload current chapter to reflect filter change
+        self._load_chapter()
+
+    def action_toggle_footnotes(self) -> None:
+        """Toggle footnotes filter (F)."""
+        self._filters.toggle_footnotes()
+        status = self.query_one("#status-bar", StatusBar)
+        if self._filters.footnotes:
+            status.show_message("Voetnoten aan")
+        else:
+            status.show_message("Voetnoten uit")
+        status.set_filters(self._filters)
+        # Reload current chapter to reflect filter change
+        self._load_chapter()
+
+    def action_strongs_next_word(self) -> None:
+        """Navigate to next word with Strong's number (Ctrl+l)."""
+        if not self._in_strongs_mode:
+            return
+
+        if not self._strongs_words_in_verse:
+            self._update_strongs_words_in_verse()
+
+        if not self._strongs_words_in_verse:
+            self.query_one("#status-bar", StatusBar).show_message(
+                "Geen Strong's nummers in dit vers"
+            )
+            return
+
+        # Move to next word
+        self._strongs_word_index = (self._strongs_word_index + 1) % len(self._strongs_words_in_verse)
+        self._lookup_current_strongs()
+
+    def action_strongs_prev_word(self) -> None:
+        """Navigate to previous word with Strong's number (Ctrl+h)."""
+        if not self._in_strongs_mode:
+            return
+
+        if not self._strongs_words_in_verse:
+            self._update_strongs_words_in_verse()
+
+        if not self._strongs_words_in_verse:
+            self.query_one("#status-bar", StatusBar).show_message(
+                "Geen Strong's nummers in dit vers"
+            )
+            return
+
+        # Move to previous word
+        self._strongs_word_index = (self._strongs_word_index - 1) % len(self._strongs_words_in_verse)
+        self._lookup_current_strongs()
+
+    def _update_strongs_words_in_verse(self) -> None:
+        """Update the list of words with Strong's numbers in current verse."""
+        view = self._get_active_view()
+        segment = view.get_current_segment()
+
+        self._strongs_words_in_verse = []
+        self._strongs_word_index = 0
+
+        if segment and segment.words:
+            for i, word in enumerate(segment.words):
+                if word.strongs:
+                    self._strongs_words_in_verse.append(i)
+
+    def _lookup_current_strongs(self) -> None:
+        """Look up the Strong's number for the currently selected word."""
+        view = self._get_active_view()
+        segment = view.get_current_segment()
+
+        if not segment or not segment.words or not self._strongs_words_in_verse:
+            return
+
+        if self._strongs_word_index >= len(self._strongs_words_in_verse):
+            self._strongs_word_index = 0
+
+        word_idx = self._strongs_words_in_verse[self._strongs_word_index]
+        if word_idx >= len(segment.words):
+            return
+
+        word = segment.words[word_idx]
+        if not word.strongs:
+            return
+
+        # Get the first Strong's number (could be multiple)
+        strongs_num = word.strongs[0]
+
+        # Determine which dictionary modules to use based on G or H prefix
+        if strongs_num.startswith("G"):
+            modules = self._active_greek_modules
+        elif strongs_num.startswith("H"):
+            modules = self._active_hebrew_modules
+        else:
+            modules = self._active_greek_modules + self._active_hebrew_modules
+
+        # Look up in dictionary
+        entries = self._dictionary_backend.lookup_strongs(strongs_num, modules)
+
+        # Update the strongs view
+        strongs_view = self.query_one("#strongs-view", StrongsView)
+        strongs_view.update_entries(strongs_num, entries)
+
+        # Show status with current word
+        status = self.query_one("#status-bar", StatusBar)
+        word_count = len(self._strongs_words_in_verse)
+        status.show_message(
+            f"{word.text}[{strongs_num}] ({self._strongs_word_index + 1}/{word_count})"
+        )
+
     def _load_parallel_chapter(self) -> None:
         """Load current chapter into both parallel panes."""
         parallel = self.query_one("#parallel-view", ParallelView)
+
+        # Set Strong's display flag
+        parallel.set_show_strongs(self._filters.strongs)
 
         # Left pane: primary module with current book/chapter
         left_title = f"{self._current_book} {self._current_chapter}"
@@ -1016,6 +1224,7 @@ class SwordApp(App):
             # Update secondary module for parallel view
             self._secondary_module = event.module.name
             self._secondary_backend = DiathekeBackend(self._secondary_module)
+            self._secondary_backend.set_filters(self._filters)
             if self._in_parallel_mode:
                 self._load_parallel_chapter()
             self._update_status()
@@ -1029,15 +1238,44 @@ class SwordApp(App):
         """Handle picker cancellation."""
         self._close_picker()
 
+    def on_dict_module_picker_modules_selected(
+        self, event: DictModulePicker.ModulesSelected
+    ) -> None:
+        """Handle dictionary module selection."""
+        self._close_picker()
+
+        # Update the appropriate module list based on current Strong's number
+        strongs_view = self.query_one("#strongs-view", StrongsView)
+        current_num = strongs_view.current_number
+        if current_num.startswith("H"):
+            self._active_hebrew_modules = event.modules
+        else:
+            self._active_greek_modules = event.modules
+
+        # Re-lookup current Strong's with new modules
+        self._lookup_current_strongs()
+
+        status = self.query_one("#status-bar", StatusBar)
+        status.show_message(f"{len(event.modules)} woordenboeken geselecteerd")
+
+    def on_dict_module_picker_cancelled(
+        self, event: DictModulePicker.Cancelled
+    ) -> None:
+        """Handle dictionary module picker cancellation."""
+        self._close_picker()
+
     def _close_picker(self) -> None:
         """Close any open picker."""
         self._in_picker_mode = False
         self._picking_search_preview_module = False
         self._picking_secondary_module = False
-        for picker in self.query("BookPicker, ModulePicker"):
+        self._picking_dict_modules = False
+        for picker in self.query("BookPicker, ModulePicker, DictModulePicker"):
             picker.remove()
         if self._in_search_mode:
             self.query_one("#search-view", SearchView).focus()
+        elif self._in_strongs_mode:
+            self.query_one("#bible-scroll").focus()
         elif self._in_parallel_mode:
             parallel = self.query_one("#parallel-view", ParallelView)
             if self._active_pane == "right":
@@ -1101,6 +1339,7 @@ class SwordApp(App):
         )
 
         view = self.query_one("#bible-view", BibleView)
+        view.set_show_strongs(self._filters.strongs)
         view.update_content(segments, f"{self._current_book} {self._current_chapter}")
 
         scroll = self.query_one("#bible-scroll", VerticalScroll)

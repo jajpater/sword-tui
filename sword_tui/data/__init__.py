@@ -1,6 +1,6 @@
 """Data types and Bible metadata."""
 
-from sword_tui.data.types import VerseSegment, SearchHit, Bookmark
+from sword_tui.data.types import VerseSegment, SearchHit, Bookmark, WordWithStrongs
 from sword_tui.data.canon import (
     CanonBook,
     BOOK_ORDER,
@@ -16,6 +16,7 @@ __all__ = [
     "VerseSegment",
     "SearchHit",
     "Bookmark",
+    "WordWithStrongs",
     "CanonBook",
     "BOOK_ORDER",
     "book_chapters",

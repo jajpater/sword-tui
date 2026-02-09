@@ -27,23 +27,26 @@ class VerseRow(Static):
     }
     """
 
-    def __init__(self, segment: VerseSegment, **kwargs):
+    def __init__(self, segment: VerseSegment, show_strongs: bool = False, **kwargs):
         super().__init__("", **kwargs)
         self.segment = segment
         self._is_current = False
         self._is_selected = False
         self._search_query = ""
+        self._show_strongs = show_strongs
 
     def set_state(
         self,
         is_current: bool = False,
         is_selected: bool = False,
         search_query: str = "",
+        show_strongs: bool = False,
     ) -> None:
         """Update the verse state and re-render."""
         self._is_current = is_current
         self._is_selected = is_selected
         self._search_query = search_query
+        self._show_strongs = show_strongs
         self._render_verse()
 
         # Update CSS classes
@@ -73,13 +76,34 @@ class VerseRow(Static):
         text.append(f"{self.segment.verse}", style=verse_style)
         text.append(". ", style="dim")
 
-        # Verse text with optional search highlighting
+        # Verse text with optional search highlighting and Strong's numbers
         base_style = ""
         if self._is_selected and not self._is_current:
             base_style = "on #333300"
 
-        self._append_with_highlight(text, self.segment.text, base_style)
+        if self._show_strongs and self.segment.words:
+            self._append_with_strongs(text, base_style)
+        else:
+            self._append_with_highlight(text, self.segment.text, base_style)
         self.update(text)
+
+    def _append_with_strongs(self, text: Text, base_style: str = "") -> None:
+        """Append verse text with Strong's numbers inline."""
+        for i, word in enumerate(self.segment.words):
+            if i > 0:
+                text.append(" ", style=base_style)
+
+            # Apply search highlighting to the word if needed
+            if self._search_query and self._search_query.lower() in word.text.lower():
+                # Highlight the word
+                text.append(word.text, style="bold black on yellow")
+            else:
+                text.append(word.text, style=base_style)
+
+            # Append Strong's numbers if present
+            if word.strongs:
+                strongs_str = ",".join(word.strongs)
+                text.append(f"[{strongs_str}]", style="dim cyan")
 
     def _append_with_highlight(
         self, text: Text, content: str, base_style: str = ""
@@ -126,6 +150,7 @@ class BibleView(Vertical):
         self._visual_start: Optional[int] = None
         self._visual_mode = False
         self._verse_widgets: dict[int, VerseRow] = {}
+        self._show_strongs = False
 
     @property
     def current_verse(self) -> int:
@@ -163,6 +188,11 @@ class BibleView(Vertical):
         self._visual_start = None
         self._rebuild_widgets()
 
+    def set_show_strongs(self, show: bool) -> None:
+        """Set whether to show Strong's numbers inline."""
+        self._show_strongs = show
+        self._update_verse_states()
+
     def _rebuild_widgets(self) -> None:
         """Rebuild all verse widgets."""
         # Remove existing widgets properly
@@ -174,10 +204,10 @@ class BibleView(Vertical):
         vis_start, vis_end = self.get_visual_range() if self._visual_mode else (0, 0)
 
         for seg in self._segments:
-            widget = VerseRow(seg)
+            widget = VerseRow(seg, show_strongs=self._show_strongs)
             is_current = seg.verse == self._current_verse
             is_selected = self._visual_mode and vis_start <= seg.verse <= vis_end
-            widget.set_state(is_current, is_selected, self._search_query)
+            widget.set_state(is_current, is_selected, self._search_query, self._show_strongs)
             self._verse_widgets[seg.verse] = widget
             self.mount(widget)
 
@@ -188,7 +218,7 @@ class BibleView(Vertical):
         for verse_num, widget in self._verse_widgets.items():
             is_current = verse_num == self._current_verse
             is_selected = self._visual_mode and vis_start <= verse_num <= vis_end
-            widget.set_state(is_current, is_selected, self._search_query)
+            widget.set_state(is_current, is_selected, self._search_query, self._show_strongs)
 
     def _scroll_to_current(self) -> None:
         """Scroll to make current verse visible."""

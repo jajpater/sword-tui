@@ -8,6 +8,8 @@ from sword_tui.widgets.command_input import CommandInput
 from sword_tui.widgets.module_picker import ModulePicker
 from sword_tui.widgets.status_bar import StatusBar
 from sword_tui.widgets.search_view import SearchView
+from sword_tui.widgets.strongs_view import StrongsView
+from sword_tui.widgets.dict_module_picker import DictModulePicker
 
 __all__ = [
     "BibleView",
@@ -18,4 +20,6 @@ __all__ = [
     "ModulePicker",
     "StatusBar",
     "SearchView",
+    "StrongsView",
+    "DictModulePicker",
 ]

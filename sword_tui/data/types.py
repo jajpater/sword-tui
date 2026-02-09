@@ -2,7 +2,19 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
+
+
+@dataclass(frozen=True)
+class WordWithStrongs:
+    """A word with optional Strong's numbers."""
+
+    text: str
+    strongs: Tuple[str, ...] = ()  # e.g., ("G1063",) or ("G25", "G5656")
+
+    def __str__(self) -> str:
+        """Return the word text."""
+        return self.text
 
 
 @dataclass(frozen=True)
@@ -13,11 +25,17 @@ class VerseSegment:
     chapter: int
     verse: int
     text: str
+    words: Tuple[WordWithStrongs, ...] = ()  # Parsed words with Strong's data
 
     @property
     def reference(self) -> str:
         """Return formatted reference string."""
         return f"{self.book} {self.chapter}:{self.verse}"
+
+    @property
+    def has_strongs(self) -> bool:
+        """Check if this verse has any Strong's numbers."""
+        return any(w.strongs for w in self.words)
 
 
 @dataclass(frozen=True)

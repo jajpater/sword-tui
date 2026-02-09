@@ -4,9 +4,46 @@ import html
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from typing import List, Optional
 
-from sword_tui.data.types import VerseSegment, SearchHit
+from sword_tui.data.types import VerseSegment, SearchHit, WordWithStrongs
+
+
+@dataclass
+class DiathekeFilters:
+    """Diatheke output filter flags.
+
+    Controls which additional data is included in diatheke output.
+    Maps to diatheke -f option flags.
+    """
+
+    strongs: bool = False  # 'n' - Strong's numbers
+    footnotes: bool = False  # 'f' - Footnotes
+
+    def to_flag_string(self) -> str:
+        """Convert active filters to diatheke -f flag string.
+
+        Returns:
+            String of single-char flags, e.g. 'n' for Strong's only,
+            'nf' for Strong's + footnotes, '' for no filters.
+        """
+        flags = ""
+        if self.strongs:
+            flags += "n"
+        if self.footnotes:
+            flags += "f"
+        return flags
+
+    def toggle_strongs(self) -> None:
+        """Toggle Strong's numbers filter."""
+        self.strongs = not self.strongs
+
+    def toggle_footnotes(self) -> None:
+        """Toggle footnotes filter."""
+        self.footnotes = not self.footnotes
+
+
 from sword_tui.data.canon import (
     diatheke_token,
     resolve_alias,
@@ -28,6 +65,11 @@ _LEADING_VERSE = re.compile(r"^(?P<verse>\d+)[\.\:\s]+(?P<text>.*)$")
 # Search result pattern: "Book Chapter:Verse"
 _SEARCH_REF = re.compile(r"^([\w\s]+)\s+(\d+):(\d+)\s*$")
 
+# Pattern to extract Strong's word tags: <w savlm="strong:G1063 strong:G25">text</w>
+_STRONGS_WORD = re.compile(r'<w\s+savlm="([^"]+)"[^>]*>([^<]+)</w>')
+# Pattern to extract Strong's numbers from savlm attribute
+_STRONGS_NUM = re.compile(r'strong:([GH]\d+)')
+
 
 class DiathekeBackend:
     """Interface to the diatheke CLI with fallback demo data."""
@@ -41,10 +83,15 @@ class DiathekeBackend:
         """
         self.module = module
         self.available = not force_fallback and shutil.which("diatheke") is not None
+        self._filters: Optional[DiathekeFilters] = None
 
     def set_module(self, module: str) -> None:
         """Set the active module."""
         self.module = module
+
+    def set_filters(self, filters: Optional[DiathekeFilters]) -> None:
+        """Set the diatheke filters to use for lookups."""
+        self._filters = filters
 
     def lookup_chapter(self, book: str, chapter: int) -> List[VerseSegment]:
         """Look up an entire chapter.
@@ -149,8 +196,16 @@ class DiathekeBackend:
             return self._fallback_lookup(ref)
 
         try:
+            cmd = ["diatheke", "-b", self.module]
+            # Add filter flags if any are active
+            if self._filters:
+                flags = self._filters.to_flag_string()
+                if flags:
+                    cmd.extend(["-f", flags])
+            cmd.extend(["-k", ref])
+
             proc = subprocess.run(
-                ["diatheke", "-b", self.module, "-k", ref],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -161,38 +216,132 @@ class DiathekeBackend:
         except (subprocess.TimeoutExpired, OSError):
             return ""
 
+    def _parse_strongs_words(self, raw_line: str) -> tuple[str, tuple[WordWithStrongs, ...]]:
+        """Parse Strong's numbers from a raw line with XML markup.
+
+        Args:
+            raw_line: Raw line containing <w savlm="strong:G1063">word</w> tags
+
+        Returns:
+            Tuple of (plain_text, words_with_strongs)
+        """
+        words: list[WordWithStrongs] = []
+        plain_parts: list[str] = []
+        last_end = 0
+
+        for match in _STRONGS_WORD.finditer(raw_line):
+            # Add any text before this match
+            before = raw_line[last_end:match.start()]
+            # Strip HTML from the "before" text
+            before_clean = _HTML_TAG.sub(" ", before)
+            before_clean = html.unescape(before_clean)
+            before_clean = _WHITESPACE.sub(" ", before_clean).strip()
+            if before_clean:
+                plain_parts.append(before_clean)
+                # Add non-strongs words
+                for word in before_clean.split():
+                    if word:
+                        words.append(WordWithStrongs(text=word))
+
+            # Extract Strong's numbers from savlm attribute
+            savlm = match.group(1)
+            word_text = match.group(2).strip()
+            strongs_nums = tuple(_STRONGS_NUM.findall(savlm))
+
+            if word_text:
+                plain_parts.append(word_text)
+                words.append(WordWithStrongs(text=word_text, strongs=strongs_nums))
+
+            last_end = match.end()
+
+        # Handle remaining text after last match
+        after = raw_line[last_end:]
+        after_clean = _HTML_TAG.sub(" ", after)
+        after_clean = html.unescape(after_clean)
+        after_clean = _WHITESPACE.sub(" ", after_clean).strip()
+        if after_clean:
+            plain_parts.append(after_clean)
+            for word in after_clean.split():
+                if word:
+                    words.append(WordWithStrongs(text=word))
+
+        plain_text = " ".join(plain_parts)
+        plain_text = _WHITESPACE.sub(" ", plain_text).strip()
+
+        return plain_text, tuple(words)
+
     def _parse_lookup(
         self, book: str, chapter: int, text: str
     ) -> List[VerseSegment]:
         """Parse diatheke lookup output into verse segments."""
-        lines = self._normalize_lines(text)
+        # Keep both raw and normalized lines for Strong's parsing
+        raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
         segments: List[VerseSegment] = []
 
-        for line in lines:
+        for raw_line in raw_lines:
+            # Skip module attribution lines
+            if raw_line.startswith("(") and raw_line.endswith(")"):
+                continue
+
+            # First normalize to get reference pattern
+            normalized = _HTML_TAG.sub(" ", raw_line)
+            normalized = html.unescape(normalized)
+            normalized = _WHITESPACE.sub(" ", normalized).strip()
+
+            if not normalized:
+                continue
+
             # Try full reference pattern: "Book Chapter:Verse: text"
-            match = _VERSE_PATTERN.match(line)
+            match = _VERSE_PATTERN.match(normalized)
             if match:
                 raw_book = match.group("book").strip()
                 ch = int(match.group("chapter"))
                 verse = int(match.group("verse"))
-                verse_text = match.group("text").strip()
 
                 # Resolve diatheke book name to canonical
                 seg_book = DIATHEKE_TO_CANON.get(raw_book)
                 if not seg_book:
                     seg_book = resolve_alias(raw_book) or book
 
+                # Parse Strong's from the raw text portion
+                # Find the text part after the reference in the raw line
+                ref_pattern = re.compile(
+                    rf"{re.escape(raw_book)}\s+{ch}:{verse}\s*[:\-]?\s*"
+                )
+                ref_match = ref_pattern.search(raw_line)
+                if ref_match:
+                    raw_text = raw_line[ref_match.end():]
+                    verse_text, words = self._parse_strongs_words(raw_text)
+                else:
+                    verse_text = match.group("text").strip()
+                    words = ()
+
                 if verse_text:
-                    segments.append(VerseSegment(seg_book, ch, verse, verse_text))
+                    segments.append(VerseSegment(
+                        seg_book, ch, verse, verse_text, words
+                    ))
                 continue
 
             # Try leading verse number pattern: "1. text"
-            match2 = _LEADING_VERSE.match(line)
+            match2 = _LEADING_VERSE.match(normalized)
             if match2:
                 verse = int(match2.group("verse"))
-                verse_text = match2.group("text").strip()
+
+                # Parse Strong's from raw line
+                # Find text after verse number
+                verse_pattern = re.compile(rf"^\s*{verse}[\.\:\s]+")
+                verse_match = verse_pattern.match(raw_line)
+                if verse_match:
+                    raw_text = raw_line[verse_match.end():]
+                    verse_text, words = self._parse_strongs_words(raw_text)
+                else:
+                    verse_text = match2.group("text").strip()
+                    words = ()
+
                 if verse_text:
-                    segments.append(VerseSegment(book, chapter, verse, verse_text))
+                    segments.append(VerseSegment(
+                        book, chapter, verse, verse_text, words
+                    ))
                 continue
 
         return segments
