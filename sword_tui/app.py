@@ -122,6 +122,7 @@ class SwordApp(App):
 
         # Cross-reference mode state
         self._in_crossref_mode = False
+        self._crossref_pane_focused = False
         self._crossref_backend = CrossRefBackend()
 
         # Study mode state (3-pane view)
@@ -262,17 +263,21 @@ class SwordApp(App):
                 event.stop()
                 self.action_toggle_crossrefs()  # Exit crossref mode
                 return
-            elif char == "j" or key == "down":
+            elif key == "tab":
+                event.stop()
+                self._toggle_crossref_pane_focus()
+                return
+            elif (char == "j" or key == "down") and self._crossref_pane_focused:
                 event.stop()
                 crossref_view = self.query_one("#crossref-view", CrossRefView)
                 crossref_view.action_next_item()
                 return
-            elif char == "k" or key == "up":
+            elif (char == "k" or key == "up") and self._crossref_pane_focused:
                 event.stop()
                 crossref_view = self.query_one("#crossref-view", CrossRefView)
                 crossref_view.action_prev_item()
                 return
-            elif key == "enter":
+            elif key == "enter" and self._crossref_pane_focused:
                 event.stop()
                 crossref_view = self.query_one("#crossref-view", CrossRefView)
                 crossref_view.action_select_item()
@@ -298,6 +303,14 @@ class SwordApp(App):
                 event.stop()
                 jumplist_view = self.query_one("#jumplist-view", JumpListView)
                 jumplist_view.action_select_item()
+                return
+            elif char == "e":
+                event.stop()
+                self._export_jumplist({"with_text": False})
+                return
+            elif char == "E":
+                event.stop()
+                self._export_jumplist({"with_text": True})
                 return
 
         # Handle study mode keys
@@ -447,6 +460,10 @@ class SwordApp(App):
 
     def action_next_verse(self) -> None:
         """Move to next verse (j key) - in Strong's mode with dict pane: scroll down."""
+        # In crossref mode with crossref pane focused, j/k handled by on_key
+        if self._in_crossref_mode and self._crossref_pane_focused:
+            return
+
         # In Strong's mode with dictionary pane focused, scroll dictionary
         if self._in_strongs_mode and self._strongs_pane_focused:
             self._scroll_strongs_down()
@@ -474,6 +491,10 @@ class SwordApp(App):
 
     def action_prev_verse(self) -> None:
         """Move to previous verse (k key) - in Strong's mode with dict pane: scroll up."""
+        # In crossref mode with crossref pane focused, j/k handled by on_key
+        if self._in_crossref_mode and self._crossref_pane_focused:
+            return
+
         # In Strong's mode with dictionary pane focused, scroll dictionary
         if self._in_strongs_mode and self._strongs_pane_focused:
             self._scroll_strongs_up()
@@ -1094,6 +1115,7 @@ class SwordApp(App):
         if self._in_crossref_mode:
             # Exit cross-reference mode
             self._in_crossref_mode = False
+            self._crossref_pane_focused = False
             status.show_message("Cross-references uit")
 
             # Hide crossref view
@@ -1450,6 +1472,16 @@ class SwordApp(App):
             status.show_message("Woordenboek pane - j/k scroll, y kopieer")
         else:
             status.show_message("Bijbel pane - h/l Strong's navigatie")
+
+    def _toggle_crossref_pane_focus(self) -> None:
+        """Toggle logical focus between bible view and crossref pane."""
+        self._crossref_pane_focused = not self._crossref_pane_focused
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._crossref_pane_focused:
+            status.show_message("Cross-ref pane - j/k nav, Enter ga naar")
+        else:
+            status.show_message("Bijbel pane - j/k verzen")
 
     def _scroll_strongs_down(self) -> None:
         """Scroll the strongs view down."""
@@ -2177,6 +2209,8 @@ class SwordApp(App):
                 search_view.set_display_mode(mode)
         elif action == "toggle_jumplist":
             self.action_toggle_jumplist()
+        elif action == "export_jumplist":
+            self._export_jumplist(result.data or {})
         elif result.message:
             self.query_one("#status-bar", StatusBar).show_message(result.message)
 
@@ -2225,3 +2259,51 @@ class SwordApp(App):
             lines.append(f"<sup>{s.verse}</sup> {s.text} ")
         lines.append("</p>")
         return "\n".join(lines)
+
+    def _export_jumplist(self, data: dict) -> None:
+        """Export jumplist entries to a file.
+
+        Args:
+            data: Dict with keys:
+                - with_text: bool - include verse text
+                - module: str (optional) - SWORD module for text lookup
+                - path: str (optional) - output file path (default: jumplist.txt)
+        """
+        status = self.query_one("#status-bar", StatusBar)
+        entries = self._jumplist.entries
+
+        if not entries:
+            status.show_message("Jumplist is leeg")
+            return
+
+        with_text = data.get("with_text", False)
+        path = Path(data.get("path", "jumplist.txt"))
+        module = data.get("module")
+
+        lines: list[str] = []
+        if with_text:
+            # Use a temporary backend if a different module is requested
+            if module and module != self._current_module:
+                backend = DiathekeBackend(module)
+            else:
+                backend = self._backend
+            for e in entries:
+                ref = f"{e.book} {e.chapter}:{e.verse}"
+                lines.append(ref)
+                seg = backend.lookup_verse(e.book, e.chapter, e.verse)
+                if seg:
+                    lines.append(f"  {seg.text}")
+                else:
+                    lines.append("  (tekst niet gevonden)")
+                lines.append("")
+        else:
+            for e in entries:
+                lines.append(f"{e.book} {e.chapter}:{e.verse}")
+
+        try:
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            status.show_message(
+                f"Jumplist ({len(entries)} entries) opgeslagen: {path}"
+            )
+        except OSError as exc:
+            status.show_message(f"Fout bij schrijven: {exc}")

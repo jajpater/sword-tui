@@ -76,6 +76,8 @@ NAVIGATIE GESCHIEDENIS
   Ctrl+O      Terug (vorige locatie)
   Ctrl+I      Vooruit (volgende locatie)
   Ctrl+J      Jumplist paneel tonen
+  e           Export jumplist (alleen referenties)
+  E           Export jumplist (referenties + tekst)
 
 ZOEKEN
   /           KWIC zoeken in hele bijbel
@@ -119,8 +121,8 @@ STRONG'S & CROSS-REFS
   s           Toggle Strong's modus
   x           Toggle cross-references
   h/l         Strong's: vorig/volgend woord
-  j/k         Crossref: navigeer lijst
-  Tab         Wissel focus (Strong's)
+  j/k         Crossref: navigeer lijst (in crossref pane)
+  Tab         Wissel focus (bijbel/crossref of Strong's)
   Enter       Ga naar cross-reference
 
 STUDY MODE (3-pane)
@@ -136,13 +138,44 @@ COMMANDO'S
   :export     Exporteer tekst naar klembord
   :goto <ref> Ga naar referentie
   :jumps      Jumplist paneel tonen
+  :jumps export [pad]           Export referenties naar bestand
+  :jumps export --text [pad]    Export referenties + verstekst
   :help       Deze hulp tonen
 """
         return CommandResult(success=True, message=help_text)
 
     def _cmd_jumps(self, cmd: ParsedCommand) -> CommandResult:
-        """Handle :jumps command."""
-        return CommandResult(success=True, action="toggle_jumplist")
+        """Handle :jumps command.
+
+        Subcommands:
+            :jumps              Toggle jumplist panel
+            :jumps export [pad] Export refs to file (default: jumplist.txt)
+            :jumps export --text [--module=X] [pad]  Export refs + verse text
+        """
+        if not cmd.args:
+            return CommandResult(success=True, action="toggle_jumplist")
+
+        subcommand = cmd.args[0].lower()
+
+        if subcommand == "export":
+            with_text = "text" in cmd.flags
+            module = cmd.flags.get("module")
+            # Remaining args after "export" are the file path
+            path_parts = cmd.args[1:]
+            path = " ".join(path_parts) if path_parts else "jumplist.txt"
+            data = {"path": path, "with_text": with_text}
+            if module:
+                data["module"] = module
+            return CommandResult(
+                success=True,
+                action="export_jumplist",
+                data=data,
+            )
+
+        return CommandResult(
+            success=False,
+            message=f"Onbekend jumps subcommando: {subcommand}",
+        )
 
     def _cmd_module(self, cmd: ParsedCommand) -> CommandResult:
         """Handle :module command."""

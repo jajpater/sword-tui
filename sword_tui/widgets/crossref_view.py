@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple
 
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static
 from textual.message import Message
@@ -153,11 +153,7 @@ class CrossRefView(Widget):
     }
     """
 
-    BINDINGS = [
-        ("j", "next_item", "Next"),
-        ("k", "prev_item", "Previous"),
-        ("enter", "select_item", "Go to"),
-    ]
+    # Navigation handled by SwordApp.on_key() via _crossref_pane_focused flag.
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -168,8 +164,7 @@ class CrossRefView(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static("Cross-References", id="crossref-header")
-        with VerticalScroll(id="crossref-scroll"):
-            yield Vertical(id="crossref-content")
+        yield VerticalScroll(id="crossref-scroll")
         yield Static("", id="crossref-status")
 
     def update_crossrefs(
@@ -205,12 +200,12 @@ class CrossRefView(Widget):
             status.update("")
 
         # Clear and rebuild content
-        content = self.query_one("#crossref-content", Vertical)
-        content.remove_children()
+        scroll = self.query_one("#crossref-scroll", VerticalScroll)
+        scroll.remove_children()
 
         if not crossrefs:
             if source_ref:
-                content.mount(Static("Geen cross-references gevonden", classes="no-refs"))
+                scroll.mount(Static("Geen cross-references gevonden", classes="no-refs"))
             self._items = []
             return
 
@@ -221,13 +216,13 @@ class CrossRefView(Widget):
         for xref, source in crossrefs:
             # Add source header when source changes
             if source != current_source:
-                content.mount(SourceHeader(source))
+                scroll.mount(SourceHeader(source))
                 current_source = source
 
             item = CrossRefItem(xref, item_index, source)
             if item_index == 0:
                 item.select()
-            content.mount(item)
+            scroll.mount(item)
             self._items.append(item)
             item_index += 1
 
@@ -239,7 +234,7 @@ class CrossRefView(Widget):
         self._items = []
         self.query_one("#crossref-header", Static).update("Cross-References")
         self.query_one("#crossref-status", Static).update("")
-        self.query_one("#crossref-content", Vertical).remove_children()
+        self.query_one("#crossref-scroll", VerticalScroll).remove_children()
 
     def action_next_item(self) -> None:
         """Move to next cross-reference."""
@@ -277,8 +272,9 @@ class CrossRefView(Widget):
         self._selected_index = index
         if 0 <= index < len(self._items):
             self._items[index].select()
-            # Scroll into view
-            self._items[index].scroll_visible()
+            # Scroll into view via the VerticalScroll container
+            scroll = self.query_one("#crossref-scroll", VerticalScroll)
+            scroll.scroll_to_widget(self._items[index])
 
     @property
     def current_ref(self) -> str:

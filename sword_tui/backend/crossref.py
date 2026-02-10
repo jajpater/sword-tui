@@ -44,6 +44,38 @@ _PASSAGE_REF = re.compile(
 # Pattern for semicolon/comma-separated references
 _REF_SEPARATOR = re.compile(r"\s*[;]\s*")
 
+# OSIS book ID → canonical Dutch book name
+_OSIS_TO_CANON = {
+    "Gen": "Genesis", "Exod": "Exodus", "Lev": "Leviticus",
+    "Num": "Numeri", "Deut": "Deuteronomium", "Josh": "Jozua",
+    "Judg": "Richteren", "Ruth": "Ruth", "1Sam": "1 Samuël",
+    "2Sam": "2 Samuël", "1Kgs": "1 Koningen", "2Kgs": "2 Koningen",
+    "1Chr": "1 Kronieken", "2Chr": "2 Kronieken", "Ezra": "Ezra",
+    "Neh": "Nehemia", "Esth": "Esther", "Job": "Job",
+    "Ps": "Psalmen", "Prov": "Spreuken", "Eccl": "Prediker",
+    "Song": "Hooglied", "Isa": "Jesaja", "Jer": "Jeremia",
+    "Lam": "Klaagliederen", "Ezek": "Ezechiël", "Dan": "Daniël",
+    "Hos": "Hosea", "Joel": "Joël", "Amos": "Amos",
+    "Obad": "Obadja", "Jonah": "Jona", "Mic": "Micha",
+    "Nah": "Nahum", "Hab": "Habakuk", "Zeph": "Zefanja",
+    "Hag": "Haggaï", "Zech": "Zacharia", "Mal": "Maleachi",
+    "Matt": "Mattheüs", "Mark": "Markus", "Luke": "Lukas",
+    "John": "Johannes", "Acts": "Handelingen", "Rom": "Romeinen",
+    "1Cor": "1 Korinthe", "2Cor": "2 Korinthe", "Gal": "Galaten",
+    "Eph": "Efeze", "Phil": "Filippenzen", "Col": "Kolossenzen",
+    "1Thess": "1 Thessalonicenzen", "2Thess": "2 Thessalonicenzen",
+    "1Tim": "1 Timotheüs", "2Tim": "2 Timotheüs", "Titus": "Titus",
+    "Phlm": "Filemon", "Heb": "Hebreeën", "Jas": "Jakobus",
+    "1Pet": "1 Petrus", "2Pet": "2 Petrus", "1John": "1 Johannes",
+    "2John": "2 Johannes", "3John": "3 Johannes", "Jude": "Judas",
+    "Rev": "Openbaring",
+}
+
+# Pattern for <reference osisRef="Book.Chapter.Verse"> in OSIS output
+_OSIS_REF_PATTERN = re.compile(
+    r'<reference\s+osisRef="(?P<ref>[^"]+)"'
+)
+
 # Abbreviation mappings for common book abbreviations in references
 _BOOK_ABBREVS = {
     "Joh": "John", "Jo": "John", "Jn": "John",
@@ -115,6 +147,73 @@ _BOOK_ABBREVS = {
 }
 
 
+def parse_osis_refs(output: str) -> List[CrossReference]:
+    """Parse <reference osisRef="..."> tags from OSIS output.
+
+    Module-level function so it can be reused by other backends (e.g.
+    CommentaryBackend when TSK is selected as commentary module).
+
+    osisRef format: "Book.Chapter.Verse" or "Book.Ch.Vs-Book.Ch.Ve"
+    Examples: "Gen.1.1", "Prov.8.22-Prov.8.24", "John.10.27-John.10.30"
+    """
+    refs: List[CrossReference] = []
+    seen: set = set()
+
+    for match in _OSIS_REF_PATTERN.finditer(output):
+        raw = match.group("ref")
+
+        # Handle ranges: "Book.Ch.Vs-Book.Ch.Ve"
+        parts = raw.split("-")
+        start = parts[0]
+        tokens = start.split(".")
+
+        if len(tokens) < 3:
+            continue
+
+        osis_book = tokens[0]
+        try:
+            chapter = int(tokens[1])
+            verse = int(tokens[2])
+        except (ValueError, IndexError):
+            continue
+
+        verse_end = None
+        if len(parts) == 2:
+            end_tokens = parts[1].split(".")
+            if len(end_tokens) >= 3:
+                try:
+                    end_ch = int(end_tokens[1])
+                    end_vs = int(end_tokens[2])
+                    # Only set verse_end if same chapter
+                    if end_ch == chapter:
+                        verse_end = end_vs
+                except (ValueError, IndexError):
+                    pass
+
+        # Resolve OSIS book ID to canonical name
+        book = _OSIS_TO_CANON.get(osis_book)
+        if not book:
+            book = resolve_alias(osis_book)
+        if not book:
+            continue
+
+        key = (book, chapter, verse, verse_end)
+        if key not in seen:
+            seen.add(key)
+            refs.append(CrossReference(
+                book=book,
+                chapter=chapter,
+                verse=verse,
+                verse_end=verse_end,
+            ))
+
+    return refs
+
+
+# Modules whose diatheke output should be requested in OSIS format
+CROSSREF_MODULES = {"TSK", "Cross", "CrossRef"}
+
+
 @dataclass
 class CrossRefSource:
     """Information about a cross-reference source."""
@@ -125,9 +224,6 @@ class CrossRefSource:
 
 class CrossRefBackend:
     """Interface to cross-reference sources: TSK, commentaries, etc."""
-
-    # Known dedicated cross-reference modules
-    CROSSREF_MODULES = ["TSK", "Cross", "CrossRef"]
 
     # Known commentary modules that contain cross-references
     COMMENTARY_MODULES = ["DutKant", "MHC", "Geneva", "Catena"]
@@ -189,7 +285,7 @@ class CrossRefBackend:
             if self._module_exists(self._crossref_module):
                 self._available_crossref = self._crossref_module
         else:
-            for mod in self.CROSSREF_MODULES:
+            for mod in CROSSREF_MODULES:
                 if self._module_exists(mod):
                     self._available_crossref = mod
                     break
@@ -267,10 +363,21 @@ class CrossRefBackend:
         return all_refs
 
     def _lookup_module(self, ref: str, module: str) -> List[CrossReference]:
-        """Look up cross-references from a specific module."""
+        """Look up cross-references from a specific module.
+
+        For dedicated cross-ref modules (TSK, etc.) uses OSIS output format
+        for reliable parsing via osisRef attributes. Commentaries still use
+        the default format with scripRef/plain-text fallback.
+        """
+        is_crossref_module = module in CROSSREF_MODULES
+
         try:
+            cmd = ["diatheke", "-b", module, "-k", ref]
+            if is_crossref_module:
+                cmd = ["diatheke", "-b", module, "-f", "OSIS", "-k", ref]
+
             proc = subprocess.run(
-                ["diatheke", "-b", module, "-k", ref],
+                cmd,
                 capture_output=True,
                 timeout=10,
             )
@@ -283,12 +390,13 @@ class CrossRefBackend:
             except UnicodeDecodeError:
                 output = proc.stdout.decode("latin-1", errors="replace")
 
-            # Try scripRef tags first (common in commentaries)
+            if is_crossref_module:
+                return self._parse_osis_refs(output)
+
+            # Commentaries: try scripRef tags first, fall back to plain refs
             refs = self._parse_scripref_tags(output)
             if refs:
                 return refs
-
-            # Fall back to plain reference parsing (for TSK-style output)
             return self._parse_plain_refs(output)
 
         except (subprocess.TimeoutExpired, OSError):
@@ -410,6 +518,10 @@ class CrossRefBackend:
                 ))
 
         return refs
+
+    def _parse_osis_refs(self, output: str) -> List[CrossReference]:
+        """Delegate to module-level parse_osis_refs."""
+        return parse_osis_refs(output)
 
     def lookup_with_previews(
         self,

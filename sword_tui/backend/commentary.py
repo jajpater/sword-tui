@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 
 from sword_tui.data.types import CrossReference
 from sword_tui.data.canon import resolve_alias, DIATHEKE_TO_CANON, diatheke_token
-from sword_tui.backend.crossref import _BOOK_ABBREVS, _SCRIPREF_PATTERN
+from sword_tui.backend.crossref import _BOOK_ABBREVS, _SCRIPREF_PATTERN, CROSSREF_MODULES, parse_osis_refs
 
 
 @dataclass
@@ -126,8 +126,13 @@ class CommentaryBackend:
         ref = f"{diatheke_book} {chapter}:{verse}"
 
         try:
+            # Use OSIS format for crossref modules (TSK etc.) for reliable parsing
+            cmd = ["diatheke", "-b", mod, "-k", ref]
+            if mod in CROSSREF_MODULES:
+                cmd = ["diatheke", "-b", mod, "-f", "OSIS", "-k", ref]
+
             proc = subprocess.run(
-                ["diatheke", "-b", mod, "-k", ref],
+                cmd,
                 capture_output=True,
                 timeout=10,
             )
@@ -158,7 +163,7 @@ class CommentaryBackend:
     ) -> CommentaryEntry:
         """Parse commentary output and extract cross-references."""
         # Extract cross-references
-        crossrefs = self._extract_crossrefs(raw_text)
+        crossrefs = self._extract_crossrefs(raw_text, module)
 
         # Clean the text for display
         clean_text = self._clean_text(raw_text)
@@ -173,8 +178,12 @@ class CommentaryBackend:
             crossrefs=crossrefs,
         )
 
-    def _extract_crossrefs(self, text: str) -> List[CrossReference]:
+    def _extract_crossrefs(self, text: str, module: str = "") -> List[CrossReference]:
         """Extract cross-references from commentary text."""
+        # For crossref modules (TSK etc.) with OSIS output, use osisRef parser
+        if module in CROSSREF_MODULES:
+            return parse_osis_refs(text)
+
         refs: List[CrossReference] = []
         seen: set = set()
 
