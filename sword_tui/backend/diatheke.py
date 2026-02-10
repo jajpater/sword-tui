@@ -212,12 +212,15 @@ class DiathekeBackend:
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
-                text=True,
                 timeout=10,
             )
             if proc.returncode != 0:
                 return ""
-            return proc.stdout
+            # Decode with error handling - some modules use Latin-1
+            try:
+                return proc.stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                return proc.stdout.decode("latin-1", errors="replace")
         except (subprocess.TimeoutExpired, OSError):
             return ""
 

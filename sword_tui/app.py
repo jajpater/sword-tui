@@ -123,6 +123,7 @@ class SwordApp(App):
         self._commentary_backend = CommentaryBackend()
         self._study_commentary_module = "DutKant"  # Default commentary
         self._study_active_pane = 0  # 0=bible, 1=commentary, 2=crossrefs
+        self._study_include_bible_xrefs = False  # Toggle Bible module cross-refs
 
         # Right pane state (when unlinked)
         self._right_book = "Genesis"
@@ -288,6 +289,10 @@ class SwordApp(App):
                     new_verse = bp.current_verse + 1
                     bp.set_current_verse(new_verse)
                     self._load_study_commentary(new_verse)
+                elif self._study_active_pane == 1:
+                    # Commentary pane: scroll down
+                    scroll = study.commentary_pane.query_one("#commentary-pane-scroll")
+                    scroll.scroll_down()
                 elif self._study_active_pane == 2:
                     # Crossref pane: next ref
                     study.crossref_pane.next_ref()
@@ -300,6 +305,10 @@ class SwordApp(App):
                     new_verse = max(1, bp.current_verse - 1)
                     bp.set_current_verse(new_verse)
                     self._load_study_commentary(new_verse)
+                elif self._study_active_pane == 1:
+                    # Commentary pane: scroll up
+                    scroll = study.commentary_pane.query_one("#commentary-pane-scroll")
+                    scroll.scroll_up()
                 elif self._study_active_pane == 2:
                     # Crossref pane: prev ref
                     study.crossref_pane.prev_ref()
@@ -309,6 +318,10 @@ class SwordApp(App):
                 ref = study.crossref_pane.get_selected_ref()
                 if ref:
                     self.post_message(StudyGotoRef(ref))
+                return
+            elif char == "y":
+                event.stop()
+                self._yank_study_pane(study)
                 return
             elif char == "m":
                 event.stop()
@@ -321,6 +334,15 @@ class SwordApp(App):
                     self.query_one("#status-bar", StatusBar).show_message(
                         f"Commentaar: {self._study_commentary_module}"
                     )
+                return
+            elif char == "x":
+                event.stop()
+                self._study_include_bible_xrefs = not self._study_include_bible_xrefs
+                state = "aan" if self._study_include_bible_xrefs else "uit"
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Bijbel cross-refs: {state}"
+                )
+                self._load_study_commentary(study.bible_pane.current_verse)
                 return
 
         # Handle search mode keys
@@ -1156,9 +1178,29 @@ class SwordApp(App):
 
         study.commentary_pane.update_commentary(entry)
 
+        # Collect cross-references from commentary
+        all_refs = list(entry.crossrefs) if entry and entry.crossrefs else []
+
+        # Merge Bible module cross-refs if enabled
+        if self._study_include_bible_xrefs:
+            from sword_tui.data.canon import diatheke_token
+            canonical = self._current_book
+            diatheke_book = diatheke_token(canonical)
+            ref_str = f"{diatheke_book} {self._current_chapter}:{verse}"
+            bible_refs = self._crossref_backend.lookup_bible_module(
+                ref_str, self._current_module
+            )
+            # Deduplicate against existing refs
+            seen = {(r.book, r.chapter, r.verse) for r in all_refs}
+            for r in bible_refs:
+                key = (r.book, r.chapter, r.verse)
+                if key not in seen:
+                    seen.add(key)
+                    all_refs.append(r)
+
         # Load cross-reference texts (pane 3)
-        if entry and entry.crossrefs:
-            self._load_study_crossrefs(entry.crossrefs)
+        if all_refs:
+            self._load_study_crossrefs(all_refs)
         else:
             study.crossref_pane.clear()
 
@@ -1175,6 +1217,52 @@ class SwordApp(App):
                 texts.append("")
 
         study.crossref_pane.update_refs(refs, texts)
+
+    def _yank_study_pane(self, study: StudyView) -> None:
+        """Copy text from the active study mode pane."""
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._study_active_pane == 0:
+            # Bible pane: copy current verse text
+            bp = study.bible_pane
+            verse = bp.current_verse
+            seg = self._backend.lookup_verse(self._current_book, self._current_chapter, verse)
+            if seg:
+                text = f"{self._current_book} {self._current_chapter}:{verse} {seg.text}"
+            else:
+                text = f"{self._current_book} {self._current_chapter}:{verse}"
+            msg = f"Gekopieerd: {self._current_book} {self._current_chapter}:{verse}"
+
+        elif self._study_active_pane == 1:
+            # Commentary pane: copy full commentary text
+            cp = study.commentary_pane
+            if cp._entry:
+                text = f"[{cp._entry.module}] {cp._entry.book} {cp._entry.chapter}:{cp._entry.verse}\n{cp._entry.text}"
+                msg = f"Gekopieerd: commentaar {cp._entry.book} {cp._entry.chapter}:{cp._entry.verse}"
+            else:
+                status.show_message("Geen commentaar om te kopiëren")
+                return
+
+        elif self._study_active_pane == 2:
+            # Crossref pane: copy selected cross-reference
+            xp = study.crossref_pane
+            ref = xp.get_selected_ref()
+            if ref and 0 <= xp._selected_index < len(xp._texts):
+                ref_text = xp._texts[xp._selected_index]
+                text = f"{ref.reference}\n{ref_text}" if ref_text else ref.reference
+                msg = f"Gekopieerd: {ref.reference}"
+            else:
+                status.show_message("Geen verwijzing om te kopiëren")
+                return
+        else:
+            return
+
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+            status.show_message(msg)
+        except ImportError:
+            status.show_message("pyperclip niet beschikbaar")
 
     def on_study_goto_ref(self, message: StudyGotoRef) -> None:
         """Handle navigation to a cross-reference from study mode."""

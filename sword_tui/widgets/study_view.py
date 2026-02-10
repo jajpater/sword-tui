@@ -49,6 +49,12 @@ class BiblePane(Widget):
         text-style: bold;
     }
 
+    BiblePane.active-pane #bible-pane-header {
+        background: $primary;
+        color: $text;
+        text-style: bold reverse;
+    }
+
     BiblePane #bible-pane-scroll {
         height: 100%;
     }
@@ -149,6 +155,12 @@ class CommentaryPane(Widget):
         text-style: bold;
     }
 
+    CommentaryPane.active-pane #commentary-pane-header {
+        background: $primary;
+        color: $text;
+        text-style: bold reverse;
+    }
+
     CommentaryPane #commentary-pane-scroll {
         height: 100%;
     }
@@ -215,11 +227,9 @@ class CommentaryPane(Widget):
 
         # Cross-references section
         if entry.crossrefs:
-            xref_section = Vertical(classes="crossref-section")
-            xref_section.mount(Static("Verwijzingen:", classes="crossref-header"))
+            content.mount(Static("Verwijzingen:", classes="crossref-header"))
             for ref in entry.crossrefs:
-                xref_section.mount(Static(f"→ {ref.reference}", classes="crossref-item"))
-            content.mount(xref_section)
+                content.mount(Static(f"→ {ref.reference}", classes="crossref-item"))
 
     @property
     def crossrefs(self) -> List[CrossReference]:
@@ -248,6 +258,12 @@ class CrossRefLookupPane(Widget):
         color: $text;
         padding: 0 1;
         text-style: bold;
+    }
+
+    CrossRefLookupPane.active-pane #xref-pane-header {
+        background: $primary;
+        color: $text;
+        text-style: bold reverse;
     }
 
     CrossRefLookupPane #xref-pane-scroll {
@@ -336,16 +352,18 @@ class CrossRefLookupPane(Widget):
             return
 
         for i, (ref, text) in enumerate(zip(refs, texts)):
-            entry = Vertical(classes="xref-entry")
-
             ref_text = Text()
             ref_text.append(f"── {ref.reference} ──", style="bold cyan")
-            entry.mount(Static(ref_text, classes="xref-ref"))
 
-            if text:
-                entry.mount(Static(text, classes="xref-text"))
-            else:
-                entry.mount(Static("(tekst niet gevonden)", classes="xref-text"))
+            display_text = text if text else "(tekst niet gevonden)"
+            ref_class = "xref-ref"
+            text_class = "xref-text"
+
+            entry = Vertical(
+                Static(ref_text, classes=ref_class),
+                Static(display_text, classes=text_class),
+                classes="xref-entry",
+            )
 
             if i == 0:
                 entry.add_class("selected")
@@ -422,6 +440,10 @@ class StudyView(Widget):
             yield CommentaryPane(id="study-commentary")
             yield CrossRefLookupPane(id="study-crossrefs")
 
+    def on_mount(self) -> None:
+        """Set initial active pane highlight."""
+        self._update_active_class()
+
     @property
     def bible_pane(self) -> BiblePane:
         return self.query_one("#study-bible", BiblePane)
@@ -441,11 +463,27 @@ class StudyView(Widget):
     def set_active_pane(self, pane: int) -> None:
         """Set which pane is active (0, 1, or 2)."""
         self._active_pane = pane % 3
+        self._update_active_class()
 
     def next_pane(self) -> None:
         """Move focus to next pane."""
         self._active_pane = (self._active_pane + 1) % 3
+        self._update_active_class()
 
     def prev_pane(self) -> None:
         """Move focus to previous pane."""
         self._active_pane = (self._active_pane - 1) % 3
+        self._update_active_class()
+
+    def _update_active_class(self) -> None:
+        """Toggle .active-pane class on the 3 pane widgets."""
+        panes = [
+            self.query_one("#study-bible", BiblePane),
+            self.query_one("#study-commentary", CommentaryPane),
+            self.query_one("#study-crossrefs", CrossRefLookupPane),
+        ]
+        for i, pane in enumerate(panes):
+            if i == self._active_pane:
+                pane.add_class("active-pane")
+            else:
+                pane.remove_class("active-pane")

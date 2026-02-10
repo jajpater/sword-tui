@@ -22,6 +22,17 @@ _SCRIPREF_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Pattern for <note type="crossReference"> tags in OSIS output from Bible modules
+_OSIS_XREF_NOTE = re.compile(
+    r'<note[^>]*type="crossReference"[^>]*>(.*?)</note>',
+    re.IGNORECASE | re.DOTALL
+)
+
+# Pattern for verse reference like "1 Kron. 1:4" or "Gen 3:15"
+_SIMPLE_REF = re.compile(
+    r'(\d?\s*[A-Za-z]+\.?)\s*(\d+):(\d+)(?:-(\d+))?'
+)
+
 # Pattern for references in scripRef passage attribute
 # e.g., "Joh 11:51,52, 1Jo 2:2, Ro 5:6,8, 8:32" or "John.3.16"
 _PASSAGE_REF = re.compile(
@@ -199,10 +210,10 @@ class CrossRefBackend:
             proc = subprocess.run(
                 ["diatheke", "-b", module, "-k", "John 3:16"],
                 capture_output=True,
-                text=True,
                 timeout=5,
             )
-            return proc.returncode == 0 and "not be found" not in proc.stderr
+            stderr = proc.stderr.decode("utf-8", errors="replace")
+            return proc.returncode == 0 and "not be found" not in stderr
         except (subprocess.TimeoutExpired, OSError):
             return False
 
@@ -447,3 +458,77 @@ class CrossRefBackend:
             ))
 
         return refs_with_preview
+
+    def lookup_bible_module(self, ref: str, module: str) -> List[CrossReference]:
+        """Extract cross-references from a Bible module via OSIS output.
+
+        Runs diatheke with OSIS format and parses <note type="crossReference"> tags.
+
+        Args:
+            ref: Reference string, e.g. "John 3:16"
+            module: Bible module name, e.g. "KJV"
+
+        Returns:
+            List of CrossReference objects found in the verse's OSIS markup
+        """
+        try:
+            proc = subprocess.run(
+                ["diatheke", "-b", module, "-f", "OSIS", "-o", "nflsgxtm", "-k", ref],
+                capture_output=True,
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                return []
+
+            try:
+                output = proc.stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                output = proc.stdout.decode("latin-1", errors="replace")
+
+            return self._parse_osis_crossrefs(output)
+
+        except (subprocess.TimeoutExpired, OSError):
+            return []
+
+    def _parse_osis_crossrefs(self, output: str) -> List[CrossReference]:
+        """Parse cross-references from OSIS output."""
+        refs: List[CrossReference] = []
+        seen: set = set()
+
+        for match in _OSIS_XREF_NOTE.finditer(output):
+            note_content = match.group(1)
+            # Parse references within the note
+            for ref_match in _SIMPLE_REF.finditer(note_content):
+                raw_book = ref_match.group(1).strip().rstrip('.')
+                chapter = int(ref_match.group(2))
+                verse = int(ref_match.group(3))
+                verse_end = int(ref_match.group(4)) if ref_match.group(4) else None
+
+                # Resolve book name
+                book = _BOOK_ABBREVS.get(raw_book)
+                if not book:
+                    book = DIATHEKE_TO_CANON.get(raw_book)
+                if not book:
+                    book = resolve_alias(raw_book) or raw_book
+
+                key = (book, chapter, verse, verse_end)
+                if key not in seen:
+                    seen.add(key)
+                    refs.append(CrossReference(
+                        book=book,
+                        chapter=chapter,
+                        verse=verse,
+                        verse_end=verse_end,
+                    ))
+
+            # Also try scripRef tags within the note
+            for scripref_match in _SCRIPREF_PATTERN.finditer(note_content):
+                passage = scripref_match.group(1)
+                parsed = self._parse_passage_string(passage)
+                for r in parsed:
+                    key = (r.book, r.chapter, r.verse, r.verse_end)
+                    if key not in seen:
+                        seen.add(key)
+                        refs.append(r)
+
+        return refs

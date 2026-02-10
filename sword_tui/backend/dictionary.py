@@ -174,7 +174,6 @@ class DictionaryBackend:
             proc = subprocess.run(
                 ["diatheke", "-b", module, "-k", number],
                 capture_output=True,
-                text=True,
                 timeout=5,
             )
 
@@ -182,14 +181,20 @@ class DictionaryBackend:
             lookup_key = strongs_number.upper()  # e.g., "H430" or "G25"
             got_correct_entry = False
 
-            if proc.returncode == 0 and "Entry not found" not in proc.stdout:
+            # Decode with error handling - some modules use Latin-1
+            try:
+                stdout = proc.stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                stdout = proc.stdout.decode("latin-1", errors="replace")
+
+            if proc.returncode == 0 and "Entry not found" not in stdout:
                 # Check various formats for correct entry:
                 # - XML format: <title>H430</title>
                 # - Plain format: starts with "00430:" or "430:"
                 padded_num = number.zfill(5)  # e.g., "00430"
-                if (f"<title>{lookup_key}</title>" in proc.stdout
-                        or proc.stdout.strip().startswith(f"{padded_num}:")
-                        or proc.stdout.strip().startswith(f"{number}:")):
+                if (f"<title>{lookup_key}</title>" in stdout
+                        or stdout.strip().startswith(f"{padded_num}:")
+                        or stdout.strip().startswith(f"{number}:")):
                     got_correct_entry = True
 
             if not got_correct_entry:
@@ -197,13 +202,17 @@ class DictionaryBackend:
                 proc = subprocess.run(
                     ["diatheke", "-b", module, "-k", lookup_key],
                     capture_output=True,
-                    text=True,
                     timeout=5,
                 )
+                try:
+                    stdout = proc.stdout.decode("utf-8")
+                except UnicodeDecodeError:
+                    stdout = proc.stdout.decode("latin-1", errors="replace")
+
             if proc.returncode != 0:
                 return None
 
-            raw = proc.stdout.strip()
+            raw = stdout.strip()
             if not raw or "Entry not found" in raw:
                 return None
 

@@ -28,13 +28,17 @@ def get_installed_modules() -> List[ModuleInfo]:
         proc = subprocess.run(
             ["diatheke", "-b", "system", "-k", "modulelist"],
             capture_output=True,
-            text=True,
             timeout=10,
         )
         if proc.returncode != 0:
             return _fallback_modules()
 
-        return _parse_module_list(proc.stdout)
+        try:
+            output = proc.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            output = proc.stdout.decode("latin-1", errors="replace")
+
+        return _parse_module_list(output)
     except (subprocess.TimeoutExpired, OSError):
         return _fallback_modules()
 

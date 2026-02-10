@@ -85,10 +85,10 @@ class CommentaryBackend:
             proc = subprocess.run(
                 ["diatheke", "-b", module, "-k", "John 3:16"],
                 capture_output=True,
-                text=True,
                 timeout=5,
             )
-            return proc.returncode == 0 and "not be found" not in proc.stderr
+            stderr = proc.stderr.decode("utf-8", errors="replace")
+            return proc.returncode == 0 and "not be found" not in stderr
         except (subprocess.TimeoutExpired, OSError):
             return False
 
