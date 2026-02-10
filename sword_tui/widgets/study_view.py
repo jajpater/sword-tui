@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static
 from textual.message import Message
@@ -232,14 +232,23 @@ class CommentaryPane(Widget):
             scroll.mount(Static("Geen commentaar beschikbaar", classes="no-commentary"))
             return
 
-        # Commentary text
-        scroll.mount(Static(entry.text))
+        # Commentary text — for TSK with keyword groups, use Rich Text styling
+        if entry.keyword_groups:
+            for g in entry.keyword_groups:
+                kw_text = Text(g.keyword, style="bold white")
+                scroll.mount(Static(kw_text))
+                for r in g.refs:
+                    ref_text = Text(f"  {r.reference}", style="cyan")
+                    scroll.mount(Static(ref_text))
+                scroll.mount(Static(""))
+        else:
+            scroll.mount(Static(entry.text))
 
-        # Cross-references section
-        if entry.crossrefs:
-            scroll.mount(Static("Verwijzingen:", classes="crossref-header"))
-            for ref in entry.crossrefs:
-                scroll.mount(Static(f"→ {ref.reference}", classes="crossref-item"))
+            # Cross-references section (regular commentaries only)
+            if entry.crossrefs:
+                scroll.mount(Static("Verwijzingen:", classes="crossref-header"))
+                for ref in entry.crossrefs:
+                    scroll.mount(Static(f"→ {ref.reference}", classes="crossref-item"))
 
     @property
     def crossrefs(self) -> List[CrossReference]:
@@ -361,18 +370,12 @@ class CrossRefLookupPane(Widget):
             return
 
         for i, (ref, text) in enumerate(zip(refs, texts)):
-            ref_text = Text()
-            ref_text.append(f"── {ref.reference} ──", style="bold cyan")
-
+            content = Text()
+            content.append(f"── {ref.reference} ──", style="bold cyan")
             display_text = text if text else "(tekst niet gevonden)"
-            ref_class = "xref-ref"
-            text_class = "xref-text"
+            content.append(f"\n{display_text}", style="")
 
-            entry = Vertical(
-                Static(ref_text, classes=ref_class),
-                Static(display_text, classes=text_class),
-                classes="xref-entry",
-            )
+            entry = Static(content, classes="xref-entry")
 
             if i == 0:
                 entry.add_class("selected")
@@ -423,6 +426,59 @@ class CrossRefLookupPane(Widget):
         self.query_one("#xref-pane-header", Static).update("Cross-refs")
         self.query_one("#xref-pane-status", Static).update("")
         self.query_one("#xref-pane-scroll", VerticalScroll).remove_children()
+
+    def update_refs_grouped(
+        self,
+        refs: List[CrossReference],
+        texts: List[str],
+        keywords: list,
+    ) -> None:
+        """Update with keyword-grouped cross-references (TSK style).
+
+        Args:
+            refs: All cross-references (flat)
+            texts: Verse texts (same order as refs)
+            keywords: List of (start_index, keyword_text) tuples
+        """
+        self._refs = refs
+        self._texts = texts
+        self._selected_index = 0
+        self._entries = []
+
+        header = self.query_one("#xref-pane-header", Static)
+        header.update(f"Cross-refs ({len(refs)})")
+
+        status = self.query_one("#xref-pane-status", Static)
+        status.update("j/k: navigeer | Enter: ga naar" if refs else "")
+
+        scroll = self.query_one("#xref-pane-scroll", VerticalScroll)
+        scroll.remove_children()
+
+        if not refs:
+            scroll.mount(Static("Geen verwijzingen", classes="no-refs"))
+            return
+
+        # Build a set of indices where keywords start
+        kw_map = {idx: kw for idx, kw in keywords}
+
+        for i, (ref, text) in enumerate(zip(refs, texts)):
+            # Insert keyword header before its first ref
+            if i in kw_map:
+                kw_text = Text(kw_map[i], style="bold white")
+                scroll.mount(Static(kw_text))
+
+            content = Text()
+            content.append(f"  {ref.reference}", style="bold cyan")
+            display_text = text if text else "(tekst niet gevonden)"
+            content.append(f"\n    {display_text}", style="")
+
+            entry = Static(content, classes="xref-entry")
+
+            if i == 0:
+                entry.add_class("selected")
+
+            scroll.mount(entry)
+            self._entries.append(entry)
 
 
 class StudyView(Widget):

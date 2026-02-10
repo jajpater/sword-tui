@@ -13,6 +13,13 @@ from sword_tui.backend.crossref import _BOOK_ABBREVS, _SCRIPREF_PATTERN, CROSSRE
 
 
 @dataclass
+class KeywordGroup:
+    """A TSK keyword with its associated cross-references."""
+    keyword: str
+    refs: List[CrossReference]
+
+
+@dataclass
 class CommentaryEntry:
     """A commentary entry for a verse."""
 
@@ -23,6 +30,7 @@ class CommentaryEntry:
     text: str  # The commentary text (cleaned)
     raw_text: str  # Raw text with markup
     crossrefs: List[CrossReference]  # Extracted cross-references
+    keyword_groups: List[KeywordGroup] = None  # TSK: refs grouped by keyword
 
 
 # Pattern for <note type="crossReference"> tags (OSIS format)
@@ -166,7 +174,12 @@ class CommentaryBackend:
         crossrefs = self._extract_crossrefs(raw_text, module)
 
         # Clean the text for display
-        clean_text = self._clean_text(raw_text)
+        keyword_groups = None
+        if module in CROSSREF_MODULES:
+            clean_text = self._clean_text_osis_tsk(raw_text)
+            keyword_groups = self._extract_keyword_groups(raw_text)
+        else:
+            clean_text = self._clean_text(raw_text)
 
         return CommentaryEntry(
             module=module,
@@ -176,6 +189,7 @@ class CommentaryBackend:
             text=clean_text,
             raw_text=raw_text,
             crossrefs=crossrefs,
+            keyword_groups=keyword_groups,
         )
 
     def _extract_crossrefs(self, text: str, module: str = "") -> List[CrossReference]:
@@ -304,6 +318,108 @@ class CommentaryBackend:
             return DIATHEKE_TO_CANON[raw_book]
 
         return None
+
+    def _extract_keyword_groups(self, text: str) -> List[KeywordGroup]:
+        """Extract keyword→refs groups from TSK OSIS output.
+
+        Walks through the OSIS body, tracking text gaps between <reference>
+        tags.  A gap with ≥3 letters is a new keyword; punctuation-only gaps
+        (like "; " or ",") are ignored.
+        """
+        from sword_tui.backend.crossref import _OSIS_TO_CANON
+
+        verse_matches = re.findall(
+            r'<verse[^>]*>(.*?)</verse>', text, re.DOTALL,
+        )
+        body = max(verse_matches, key=len) if verse_matches else ""
+        if not body:
+            return []
+
+        # Match complete <reference osisRef="...">display</reference> tags
+        full_ref = re.compile(
+            r'<reference\s+osisRef="(?P<ref>[^"]+)"[^>]*>[^<]*</reference>'
+        )
+
+        groups: list[KeywordGroup] = []
+        current_kw: Optional[str] = None
+        current_refs: list[CrossReference] = []
+        last_end = 0
+
+        for m in full_ref.finditer(body):
+            # Text gap between previous ref (or start) and this ref
+            gap = body[last_end:m.start()]
+            gap_clean = re.sub(r'<[^>]+>', '', gap).strip()
+
+            # A gap with ≥3 letters and at least one period signals
+            # a new keyword (TSK keywords end with ".").  This excludes
+            # chapter-outline entries that end with ";" and punctuation
+            # gaps like "; " or ",".
+            if len(re.findall(r'[A-Za-z]', gap_clean)) >= 3 and '.' in gap_clean:
+                if current_kw is not None and current_refs:
+                    groups.append(KeywordGroup(keyword=current_kw, refs=current_refs))
+                kw = gap_clean
+                if kw.endswith('.'):
+                    kw = kw[:-1]
+                current_kw = kw
+                current_refs = []
+
+            # Parse osisRef
+            raw = m.group('ref')
+            parts = raw.split("-")
+            t = parts[0].split(".")
+            if len(t) < 3:
+                last_end = m.end()
+                continue
+            try:
+                ch, vs = int(t[1]), int(t[2])
+            except (ValueError, IndexError):
+                last_end = m.end()
+                continue
+            book = _OSIS_TO_CANON.get(t[0]) or resolve_alias(t[0]) or t[0]
+            ve = None
+            if len(parts) == 2:
+                et = parts[1].split(".")
+                if len(et) >= 3:
+                    try:
+                        if int(et[1]) == ch:
+                            ve = int(et[2])
+                    except (ValueError, IndexError):
+                        pass
+
+            if current_kw is not None:
+                current_refs.append(CrossReference(
+                    book=book, chapter=ch, verse=vs, verse_end=ve,
+                ))
+
+            last_end = m.end()
+
+        if current_kw is not None and current_refs:
+            groups.append(KeywordGroup(keyword=current_kw, refs=current_refs))
+
+        return groups
+
+    def _clean_text_osis_tsk(self, text: str) -> str:
+        """Clean TSK OSIS output for display in the commentary pane.
+
+        Shows keywords with full Dutch book name references:
+            without
+              Job 26:7
+              Jesaja 45:18
+            Spirit
+              Job 26:14
+        """
+        groups = self._extract_keyword_groups(text)
+        if not groups:
+            return ""
+
+        lines: list[str] = []
+        for g in groups:
+            lines.append(g.keyword)
+            for r in g.refs:
+                lines.append(f"  {r.reference}")
+            lines.append("")
+
+        return '\n'.join(lines).strip()
 
     def _clean_text(self, text: str) -> str:
         """Clean commentary text for display."""

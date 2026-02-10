@@ -1268,45 +1268,62 @@ class SwordApp(App):
 
         study.commentary_pane.update_commentary(entry)
 
-        # Collect cross-references from commentary
-        all_refs = list(entry.crossrefs) if entry and entry.crossrefs else []
-
-        # Merge Bible module cross-refs if enabled
-        if self._study_include_bible_xrefs:
-            from sword_tui.data.canon import diatheke_token
-            canonical = self._current_book
-            diatheke_book = diatheke_token(canonical)
-            ref_str = f"{diatheke_book} {self._current_chapter}:{verse}"
-            bible_refs = self._crossref_backend.lookup_bible_module(
-                ref_str, self._current_module
-            )
-            # Deduplicate against existing refs
-            seen = {(r.book, r.chapter, r.verse) for r in all_refs}
-            for r in bible_refs:
-                key = (r.book, r.chapter, r.verse)
-                if key not in seen:
-                    seen.add(key)
-                    all_refs.append(r)
-
         # Load cross-reference texts (pane 3)
-        if all_refs:
-            self._load_study_crossrefs(all_refs)
+        if entry and entry.keyword_groups:
+            # TSK: show refs grouped by keyword
+            self._load_study_crossrefs_grouped(entry.keyword_groups)
         else:
-            study.crossref_pane.clear()
+            # Regular commentary: flat crossref list
+            all_refs = list(entry.crossrefs) if entry and entry.crossrefs else []
+
+            # Merge Bible module cross-refs if enabled
+            if self._study_include_bible_xrefs:
+                from sword_tui.data.canon import diatheke_token
+                canonical = self._current_book
+                diatheke_book = diatheke_token(canonical)
+                ref_str = f"{diatheke_book} {self._current_chapter}:{verse}"
+                bible_refs = self._crossref_backend.lookup_bible_module(
+                    ref_str, self._current_module
+                )
+                seen = {(r.book, r.chapter, r.verse) for r in all_refs}
+                for r in bible_refs:
+                    key = (r.book, r.chapter, r.verse)
+                    if key not in seen:
+                        seen.add(key)
+                        all_refs.append(r)
+
+            if all_refs:
+                self._load_study_crossrefs(all_refs)
+            else:
+                study.crossref_pane.clear()
 
     def _load_study_crossrefs(self, refs: list) -> None:
-        """Load cross-reference texts into pane 3."""
+        """Load cross-reference texts into pane 3 (flat list)."""
         study = self.query_one("#study-view", StudyView)
 
         texts = []
         for ref in refs:
             seg = self._backend.lookup_verse(ref.book, ref.chapter, ref.verse)
-            if seg:
-                texts.append(seg.text)
-            else:
-                texts.append("")
+            texts.append(seg.text if seg else "")
 
         study.crossref_pane.update_refs(refs, texts)
+
+    def _load_study_crossrefs_grouped(self, groups) -> None:
+        """Load keyword-grouped cross-refs into pane 3 (TSK style)."""
+        study = self.query_one("#study-view", StudyView)
+
+        # Build refs + texts with keyword info for the pane
+        all_refs = []
+        all_texts = []
+        keywords = []  # (index, keyword) — which ref indices start a group
+        for group in groups:
+            keywords.append((len(all_refs), group.keyword))
+            for ref in group.refs:
+                seg = self._backend.lookup_verse(ref.book, ref.chapter, ref.verse)
+                all_refs.append(ref)
+                all_texts.append(seg.text if seg else "")
+
+        study.crossref_pane.update_refs_grouped(all_refs, all_texts, keywords)
 
     def _yank_study_pane(self, study: StudyView) -> None:
         """Copy text from the active study mode pane."""
