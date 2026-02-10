@@ -72,6 +72,11 @@ class CommandHandler:
   r           Ga naar referentie (boek picker)
   :<nummer>   Ga naar vers nummer
 
+NAVIGATIE GESCHIEDENIS
+  Ctrl+O      Terug (vorige locatie)
+  Ctrl+I      Vooruit (volgende locatie)
+  Ctrl+J      Jumplist paneel tonen
+
 ZOEKEN
   /           KWIC zoeken in hele bijbel
   Ctrl+F      Zoeken in huidig hoofdstuk
@@ -130,9 +135,14 @@ COMMANDO'S
   :module     Module picker / wissel module
   :export     Exporteer tekst naar klembord
   :goto <ref> Ga naar referentie
+  :jumps      Jumplist paneel tonen
   :help       Deze hulp tonen
 """
         return CommandResult(success=True, message=help_text)
+
+    def _cmd_jumps(self, cmd: ParsedCommand) -> CommandResult:
+        """Handle :jumps command."""
+        return CommandResult(success=True, action="toggle_jumplist")
 
     def _cmd_module(self, cmd: ParsedCommand) -> CommandResult:
         """Handle :module command."""

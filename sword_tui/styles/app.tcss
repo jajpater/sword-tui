@@ -153,6 +153,30 @@ CrossRefView #crossref-status {
     dock: bottom;
 }
 
+/* Jumplist view (side panel) */
+#jumplist-view {
+    dock: right;
+    width: 35%;
+    height: 100%;
+    border-left: solid $primary;
+}
+
+JumpListView #jumplist-header {
+    height: 1;
+    background: $primary-darken-2;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+JumpListView #jumplist-scroll {
+    height: 100%;
+}
+
+JumpListView #jumplist-status {
+    height: 1;
+    dock: bottom;
+}
+
 /* Study view (3-pane interface) */
 #study-view {
     width: 100%;

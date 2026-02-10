@@ -11,6 +11,7 @@ from textual.widgets import Header
 from sword_tui.backend import DiathekeBackend, get_installed_modules, DiathekeFilters, DictionaryBackend, CrossRefBackend, CommentaryBackend
 from sword_tui.config import get_config
 from sword_tui.commands import CommandHandler, parse_command
+from sword_tui.jumplist import JumpList
 from sword_tui.data import (
     BOOK_ORDER,
     book_chapters,
@@ -24,6 +25,8 @@ from sword_tui.widgets import (
     CrossRefView,
     CrossRefSelected,
     DictModulePicker,
+    JumpListView,
+    JumpListSelected,
     ModulePicker,
     ParallelView,
     SearchView,
@@ -74,6 +77,9 @@ class SwordApp(App):
         Binding("F", "toggle_footnotes", "Toggle footnotes", show=False),
         Binding("x", "toggle_crossrefs", "Toggle cross-references", show=False),
         Binding("T", "toggle_study", "Toggle study mode", show=False),
+        Binding("ctrl+o", "jump_back", "Jump back", show=False),
+        Binding("ctrl+i", "jump_forward", "Jump forward", show=False),
+        Binding("ctrl+j", "toggle_jumplist", "Jumplist", show=False),
     ]
 
     def __init__(self) -> None:
@@ -136,6 +142,10 @@ class SwordApp(App):
         self._search_preview_module = ""  # Module for search preview pane
         self._search_preview_backend: Optional[DiathekeBackend] = None
 
+        # Navigation history (jumplist)
+        self._jumplist = JumpList()
+        self._in_jumplist_mode = False
+
         # Key sequence buffer (for gg)
         self._key_buffer = ""
 
@@ -173,6 +183,8 @@ class SwordApp(App):
         yield StrongsView(id="strongs-view")
         # Cross-references view (initially hidden)
         yield CrossRefView(id="crossref-view")
+        # Jumplist view (initially hidden)
+        yield JumpListView(id="jumplist-view")
         # Study view - 3-pane interface (initially hidden)
         yield StudyView(id="study-view")
         yield CommandInput(
@@ -191,6 +203,7 @@ class SwordApp(App):
         self.query_one("#search-view").display = False
         self.query_one("#strongs-view").display = False
         self.query_one("#crossref-view").display = False
+        self.query_one("#jumplist-view").display = False
         self.query_one("#study-view").display = False
 
         # Initialize status bar with filters
@@ -263,6 +276,28 @@ class SwordApp(App):
                 event.stop()
                 crossref_view = self.query_one("#crossref-view", CrossRefView)
                 crossref_view.action_select_item()
+                return
+
+        # Handle jumplist mode keys
+        if self._in_jumplist_mode:
+            if key == "escape":
+                event.stop()
+                self.action_toggle_jumplist()
+                return
+            elif char == "j" or key == "down":
+                event.stop()
+                jumplist_view = self.query_one("#jumplist-view", JumpListView)
+                jumplist_view.action_next_item()
+                return
+            elif char == "k" or key == "up":
+                event.stop()
+                jumplist_view = self.query_one("#jumplist-view", JumpListView)
+                jumplist_view.action_prev_item()
+                return
+            elif key == "enter":
+                event.stop()
+                jumplist_view = self.query_one("#jumplist-view", JumpListView)
+                jumplist_view.action_select_item()
                 return
 
         # Handle study mode keys
@@ -491,6 +526,7 @@ class SwordApp(App):
 
     def action_next_chapter(self) -> None:
         """Go to next chapter, verse 1."""
+        self._record_jump()
         book = self._get_active_book()
         chapter = self._get_active_chapter()
         max_chapters = book_chapters(book)
@@ -505,6 +541,7 @@ class SwordApp(App):
 
     def action_prev_chapter(self) -> None:
         """Go to previous chapter, verse 1."""
+        self._record_jump()
         book = self._get_active_book()
         chapter = self._get_active_chapter()
         if chapter > 1:
@@ -527,6 +564,7 @@ class SwordApp(App):
 
     def action_next_book(self) -> None:
         """Go to next book, chapter 1, verse 1."""
+        self._record_jump()
         book = self._get_active_book()
         idx = book_index(book)
         if idx < len(BOOK_ORDER) - 1:
@@ -539,6 +577,7 @@ class SwordApp(App):
 
     def action_prev_book(self) -> None:
         """Go to previous book, chapter 1, verse 1."""
+        self._record_jump()
         book = self._get_active_book()
         idx = book_index(book)
         if idx > 0:
@@ -558,6 +597,7 @@ class SwordApp(App):
 
     def action_first_verse(self) -> None:
         """Go to first verse (gg)."""
+        self._record_jump()
         view = self._get_active_view()
         view.first_verse()
         if self._in_parallel_mode and self._panes_linked:
@@ -568,6 +608,7 @@ class SwordApp(App):
 
     def action_last_verse(self) -> None:
         """Go to last verse (G)."""
+        self._record_jump()
         view = self._get_active_view()
         view.last_verse()
         if self._in_parallel_mode and self._panes_linked:
@@ -578,6 +619,7 @@ class SwordApp(App):
 
     def _goto_verse(self, verse: int) -> None:
         """Go to specific verse number."""
+        self._record_jump()
         if self._in_study_mode:
             study = self.query_one("#study-view", StudyView)
             study.bible_pane.set_current_verse(verse)
@@ -1105,6 +1147,7 @@ class SwordApp(App):
 
     def on_cross_ref_selected(self, message: CrossRefSelected) -> None:
         """Handle cross-reference selection for navigation."""
+        self._record_jump()
         xref = message.crossref
 
         # Navigate to the selected reference
@@ -1291,6 +1334,7 @@ class SwordApp(App):
 
     def on_study_goto_ref(self, message: StudyGotoRef) -> None:
         """Handle navigation to a cross-reference from study mode."""
+        self._record_jump()
         xref = message.crossref
 
         self._current_book = xref.book
@@ -1635,6 +1679,7 @@ class SwordApp(App):
 
     def _search_goto_result(self) -> None:
         """Go to the selected search result."""
+        self._record_jump()
         search_view = self.query_one("#search-view", SearchView)
         hit = search_view.get_current_hit()
         if hit:
@@ -1703,6 +1748,7 @@ class SwordApp(App):
 
     def on_book_picker_book_selected(self, event: BookPicker.BookSelected) -> None:
         """Handle book selection from picker."""
+        self._record_jump()
         self._close_picker()
         self._set_active_book(event.book)
         self._set_active_chapter(event.chapter)
@@ -1809,6 +1855,97 @@ class SwordApp(App):
                 parallel.focus_left()
         else:
             self.query_one("#bible-scroll").focus()
+
+    # ==================== Jumplist ====================
+
+    def _record_jump(self) -> None:
+        """Record current position in the jumplist before a navigation jump."""
+        if self._in_study_mode:
+            study = self.query_one("#study-view", StudyView)
+            verse = study.bible_pane.current_verse or 1
+        else:
+            view = self._get_active_view()
+            verse = view.current_verse
+        self._jumplist.record(self._current_book, self._current_chapter, verse)
+
+    def _jump_navigate(self, entry) -> None:
+        """Navigate to a jumplist entry."""
+        self._current_book = entry.book
+        self._current_chapter = entry.chapter
+
+        if self._in_study_mode:
+            self._load_study_view(verse=entry.verse)
+        else:
+            self._load_chapter()
+            view = self._get_active_view()
+            view.move_to_verse(entry.verse)
+            if self._in_parallel_mode and self._panes_linked:
+                parallel = self.query_one("#parallel-view", ParallelView)
+                other = parallel.query_one(
+                    "#right-view" if self._active_pane == "left" else "#left-view",
+                    BibleView,
+                )
+                other.move_to_verse(entry.verse)
+
+        self._update_status()
+
+    def action_jump_back(self) -> None:
+        """Go back in navigation history (Ctrl+O)."""
+        if self._in_study_mode:
+            study = self.query_one("#study-view", StudyView)
+            verse = study.bible_pane.current_verse or 1
+        else:
+            view = self._get_active_view()
+            verse = view.current_verse
+
+        entry = self._jumplist.back(self._current_book, self._current_chapter, verse)
+        if entry:
+            self._jump_navigate(entry)
+        else:
+            self.query_one("#status-bar", StatusBar).show_message("Begin van jumplist")
+
+    def action_jump_forward(self) -> None:
+        """Go forward in navigation history (Ctrl+I)."""
+        entry = self._jumplist.forward()
+        if entry:
+            self._jump_navigate(entry)
+        else:
+            self.query_one("#status-bar", StatusBar).show_message("Einde van jumplist")
+
+    def action_toggle_jumplist(self) -> None:
+        """Toggle jumplist side panel (Ctrl+J)."""
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._in_jumplist_mode:
+            # Close jumplist panel
+            self._in_jumplist_mode = False
+            self.query_one("#jumplist-view").display = False
+            self.query_one("#jumplist-view", JumpListView).clear()
+            status.show_message("Jumplist gesloten")
+            if self._in_parallel_mode:
+                status.set_mode("parallel")
+            else:
+                status.set_mode("normal")
+        else:
+            # Open jumplist panel
+            self._in_jumplist_mode = True
+            self.query_one("#jumplist-view").display = True
+
+            # Fill with current entries
+            jumplist_view = self.query_one("#jumplist-view", JumpListView)
+            jumplist_view.update_entries(self._jumplist.entries, self._jumplist.cursor)
+
+            status.show_message("Jumplist | j/k nav | Enter ga naar | Esc sluiten")
+
+    def on_jump_list_selected(self, message: JumpListSelected) -> None:
+        """Handle jumplist entry selection for navigation."""
+        entry = self._jumplist.jump_to(message.index)
+        if entry:
+            self._jump_navigate(entry)
+
+        # Close the jumplist panel
+        if self._in_jumplist_mode:
+            self.action_toggle_jumplist()
 
     # ==================== Helper Methods ====================
 
@@ -1997,6 +2134,7 @@ class SwordApp(App):
         if action == "quit":
             self.exit()
         elif action == "goto":
+            self._record_jump()
             data = result.data or {}
             self._current_book = data.get("book", self._current_book)
             self._current_chapter = data.get("chapter", self._current_chapter)
@@ -2037,6 +2175,8 @@ class SwordApp(App):
             if self._in_search_mode:
                 search_view = self.query_one("#search-view", SearchView)
                 search_view.set_display_mode(mode)
+        elif action == "toggle_jumplist":
+            self.action_toggle_jumplist()
         elif result.message:
             self.query_one("#status-bar", StatusBar).show_message(result.message)
 
