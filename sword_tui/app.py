@@ -270,10 +270,12 @@ class SwordApp(App):
             study = self.query_one("#study-view", StudyView)
             if key == "escape":
                 event.stop()
+                event.prevent_default()
                 self.action_toggle_study()  # Exit study mode
                 return
             elif key == "tab":
                 event.stop()
+                event.prevent_default()
                 study.next_pane()
                 self._study_active_pane = study.active_pane
                 pane_names = ["bijbel", "commentaar", "crossrefs"]
@@ -283,6 +285,7 @@ class SwordApp(App):
                 return
             elif char == "j" or key == "down":
                 event.stop()
+                event.prevent_default()
                 if self._study_active_pane == 0:
                     # Bible pane: next verse
                     bp = study.bible_pane
@@ -299,6 +302,7 @@ class SwordApp(App):
                 return
             elif char == "k" or key == "up":
                 event.stop()
+                event.prevent_default()
                 if self._study_active_pane == 0:
                     # Bible pane: prev verse
                     bp = study.bible_pane
@@ -315,28 +319,36 @@ class SwordApp(App):
                 return
             elif key == "enter" and self._study_active_pane == 2:
                 event.stop()
+                event.prevent_default()
                 ref = study.crossref_pane.get_selected_ref()
                 if ref:
                     self.post_message(StudyGotoRef(ref))
                 return
             elif char == "y":
                 event.stop()
+                event.prevent_default()
                 self._yank_study_pane(study)
                 return
             elif char == "m":
                 event.stop()
+                event.prevent_default()
                 # Cycle through commentary modules
                 mods = self._commentary_backend.available_modules
-                if mods:
+                if mods and len(mods) > 1:
                     idx = mods.index(self._study_commentary_module) if self._study_commentary_module in mods else -1
                     self._study_commentary_module = mods[(idx + 1) % len(mods)]
                     self._load_study_commentary(study.bible_pane.current_verse)
                     self.query_one("#status-bar", StatusBar).show_message(
                         f"Commentaar: {self._study_commentary_module}"
                     )
+                elif mods:
+                    self.query_one("#status-bar", StatusBar).show_message(
+                        f"Alleen {self._study_commentary_module} beschikbaar"
+                    )
                 return
             elif char == "x":
                 event.stop()
+                event.prevent_default()
                 self._study_include_bible_xrefs = not self._study_include_bible_xrefs
                 state = "aan" if self._study_include_bible_xrefs else "uit"
                 self.query_one("#status-bar", StatusBar).show_message(
@@ -566,12 +578,17 @@ class SwordApp(App):
 
     def _goto_verse(self, verse: int) -> None:
         """Go to specific verse number."""
-        view = self._get_active_view()
-        view.move_to_verse(verse)
-        if self._in_parallel_mode and self._panes_linked:
-            parallel = self.query_one("#parallel-view", ParallelView)
-            other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
-            other.move_to_verse(verse)
+        if self._in_study_mode:
+            study = self.query_one("#study-view", StudyView)
+            study.bible_pane.set_current_verse(verse)
+            self._load_study_commentary(verse)
+        else:
+            view = self._get_active_view()
+            view.move_to_verse(verse)
+            if self._in_parallel_mode and self._panes_linked:
+                parallel = self.query_one("#parallel-view", ParallelView)
+                other = parallel.query_one("#right-view" if self._active_pane == "left" else "#left-view", BibleView)
+                other.move_to_verse(verse)
         self._update_status()
 
     def action_visual_mode(self) -> None:
@@ -1145,14 +1162,22 @@ class SwordApp(App):
             status.show_message(f"Study mode: {self._study_commentary_module} | Tab: panes | m: wissel commentaar")
             status.set_mode("study")
 
-    def _load_study_view(self) -> None:
-        """Load content into all study view panes."""
+    def _load_study_view(self, verse: int = 0) -> None:
+        """Load content into all study view panes.
+
+        Args:
+            verse: Verse to highlight and scroll to (0 = keep current or use 1).
+        """
         study = self.query_one("#study-view", StudyView)
+
+        # Determine which verse to focus
+        if verse > 0:
+            current_verse = verse
+        else:
+            current_verse = study.bible_pane.current_verse or 1
 
         # Load bible text (pane 1)
         verses = self._backend.lookup_chapter(self._current_book, self._current_chapter)
-        view = self._get_active_view()
-        current_verse = view.current_verse if hasattr(view, 'current_verse') else 1
 
         study.bible_pane.update_chapter(
             self._current_module,
@@ -1270,12 +1295,7 @@ class SwordApp(App):
 
         self._current_book = xref.book
         self._current_chapter = xref.chapter
-        self._load_study_view()
-
-        # Set verse
-        study = self.query_one("#study-view", StudyView)
-        study.bible_pane.set_current_verse(xref.verse)
-        self._load_study_commentary(xref.verse)
+        self._load_study_view(verse=xref.verse)
 
         self._update_status()
 
@@ -1687,12 +1707,14 @@ class SwordApp(App):
         self._set_active_book(event.book)
         self._set_active_chapter(event.chapter)
 
-        if self._panes_linked or not self._in_parallel_mode:
+        if self._in_study_mode:
+            self._load_study_view(verse=event.verse or 1)
+        elif self._panes_linked or not self._in_parallel_mode:
             self._load_chapter()
         else:
             self._load_active_pane_chapter()
 
-        if event.verse:
+        if not self._in_study_mode and event.verse:
             view = self._get_active_view()
             view.move_to_verse(event.verse)
             if self._in_parallel_mode and self._panes_linked:

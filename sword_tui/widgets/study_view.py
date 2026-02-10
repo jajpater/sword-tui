@@ -83,8 +83,7 @@ class BiblePane(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static("Bijbeltekst", id="bible-pane-header")
-        with VerticalScroll(id="bible-pane-scroll"):
-            yield Vertical(id="bible-pane-content")
+        yield VerticalScroll(id="bible-pane-scroll")
 
     def update_chapter(
         self,
@@ -105,9 +104,9 @@ class BiblePane(Widget):
         header = self.query_one("#bible-pane-header", Static)
         header.update(f"{module} - {book} {chapter}")
 
-        # Rebuild content
-        content = self.query_one("#bible-pane-content", Vertical)
-        content.remove_children()
+        # Rebuild content directly in the scroll container
+        scroll = self.query_one("#bible-pane-scroll", VerticalScroll)
+        scroll.remove_children()
 
         for seg in verses:
             row = Static(classes="verse-row")
@@ -117,18 +116,30 @@ class BiblePane(Widget):
             row.update(text)
             if seg.verse == current_verse:
                 row.add_class("current")
-            content.mount(row)
+            scroll.mount(row)
+
+        # Scroll to current verse after layout is complete
+        if current_verse > 1:
+            self.set_timer(0.15, self._scroll_to_current)
+
+    def _scroll_to_current(self) -> None:
+        """Scroll the bible pane to the current verse row."""
+        scroll = self.query_one("#bible-pane-scroll", VerticalScroll)
+        for row in self.query(".verse-row.current"):
+            scroll.scroll_to_widget(row, animate=False)
+            return
 
     def set_current_verse(self, verse: int) -> None:
         """Set the current verse (highlight it)."""
         self._current_verse = verse
+        scroll = self.query_one("#bible-pane-scroll", VerticalScroll)
 
-        # Update highlighting
+        # Update highlighting and scroll
         rows = list(self.query(".verse-row"))
         for i, row in enumerate(rows):
             if i < len(self._verses) and self._verses[i].verse == verse:
                 row.add_class("current")
-                row.scroll_visible()
+                scroll.scroll_to_widget(row, animate=False)
             else:
                 row.remove_class("current")
 
@@ -165,7 +176,7 @@ class CommentaryPane(Widget):
         height: 100%;
     }
 
-    CommentaryPane #commentary-pane-content {
+    CommentaryPane #commentary-pane-scroll {
         padding: 1;
     }
 
@@ -199,8 +210,7 @@ class CommentaryPane(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static("Commentaar", id="commentary-pane-header")
-        with VerticalScroll(id="commentary-pane-scroll"):
-            yield Vertical(id="commentary-pane-content")
+        yield VerticalScroll(id="commentary-pane-scroll")
 
     def update_commentary(self, entry: Optional[CommentaryEntry]) -> None:
         """Update the displayed commentary."""
@@ -214,22 +224,22 @@ class CommentaryPane(Widget):
         else:
             header.update("Commentaar")
 
-        # Rebuild content
-        content = self.query_one("#commentary-pane-content", Vertical)
-        content.remove_children()
+        # Rebuild content directly in scroll container
+        scroll = self.query_one("#commentary-pane-scroll", VerticalScroll)
+        scroll.remove_children()
 
         if not entry:
-            content.mount(Static("Geen commentaar beschikbaar", classes="no-commentary"))
+            scroll.mount(Static("Geen commentaar beschikbaar", classes="no-commentary"))
             return
 
         # Commentary text
-        content.mount(Static(entry.text))
+        scroll.mount(Static(entry.text))
 
         # Cross-references section
         if entry.crossrefs:
-            content.mount(Static("Verwijzingen:", classes="crossref-header"))
+            scroll.mount(Static("Verwijzingen:", classes="crossref-header"))
             for ref in entry.crossrefs:
-                content.mount(Static(f"→ {ref.reference}", classes="crossref-item"))
+                scroll.mount(Static(f"→ {ref.reference}", classes="crossref-item"))
 
     @property
     def crossrefs(self) -> List[CrossReference]:
@@ -312,8 +322,7 @@ class CrossRefLookupPane(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static("Cross-refs", id="xref-pane-header")
-        with VerticalScroll(id="xref-pane-scroll"):
-            yield Vertical(id="xref-pane-content")
+        yield VerticalScroll(id="xref-pane-scroll")
         yield Static("", id="xref-pane-status")
 
     def update_refs(
@@ -343,12 +352,12 @@ class CrossRefLookupPane(Widget):
         else:
             status.update("")
 
-        # Rebuild content
-        content = self.query_one("#xref-pane-content", Vertical)
-        content.remove_children()
+        # Rebuild content directly in scroll container
+        scroll = self.query_one("#xref-pane-scroll", VerticalScroll)
+        scroll.remove_children()
 
         if not refs:
-            content.mount(Static("Geen verwijzingen", classes="no-refs"))
+            scroll.mount(Static("Geen verwijzingen", classes="no-refs"))
             return
 
         for i, (ref, text) in enumerate(zip(refs, texts)):
@@ -368,7 +377,7 @@ class CrossRefLookupPane(Widget):
             if i == 0:
                 entry.add_class("selected")
 
-            content.mount(entry)
+            scroll.mount(entry)
             self._entries.append(entry)
 
     def next_ref(self) -> None:
@@ -396,7 +405,8 @@ class CrossRefLookupPane(Widget):
         self._selected_index = index
         if 0 <= index < len(self._entries):
             self._entries[index].add_class("selected")
-            self._entries[index].scroll_visible()
+            scroll = self.query_one("#xref-pane-scroll", VerticalScroll)
+            scroll.scroll_to_widget(self._entries[index])
 
     def get_selected_ref(self) -> Optional[CrossReference]:
         """Get the currently selected cross-reference."""
@@ -412,7 +422,7 @@ class CrossRefLookupPane(Widget):
         self._entries = []
         self.query_one("#xref-pane-header", Static).update("Cross-refs")
         self.query_one("#xref-pane-status", Static).update("")
-        self.query_one("#xref-pane-content", Vertical).remove_children()
+        self.query_one("#xref-pane-scroll", VerticalScroll).remove_children()
 
 
 class StudyView(Widget):
