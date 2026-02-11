@@ -38,6 +38,8 @@ COMMAND_ALIASES: Dict[str, str] = {
     "bm": "bookmark",
     "exp": "export",
     "p": "parallel",
+    "tn": "tabnew",
+    "tc": "tabclose",
 }
 
 
@@ -119,6 +121,9 @@ def get_command_names() -> List[str]:
         "goto",
         "search",
         "yank",
+        "tabnew",
+        "tabclose",
+        "tabname",
     ]
 
 

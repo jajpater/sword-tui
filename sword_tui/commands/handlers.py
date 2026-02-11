@@ -132,6 +132,15 @@ STUDY MODE (3-pane)
   m           Wissel commentaar module
   Enter       Ga naar cross-reference (in xref pane)
 
+TABS
+  gt          Volgende tab
+  gT          Vorige tab
+  1gt..9gt    Ga naar tab N
+  :tabnew     Nieuwe tab
+  :tabnew <r> Nieuwe tab bij referentie
+  :tabclose   Sluit huidige tab
+  :tabname    Hernoem tab
+
 COMMANDO'S
   :quit :q    Afsluiten
   :module     Module picker / wissel module
@@ -438,6 +447,33 @@ COMMANDO'S
                 success=False,
                 message="Gebruik: :searchmode [1|2|3]"
             )
+
+    def _cmd_tabnew(self, cmd: ParsedCommand) -> CommandResult:
+        """Handle :tabnew command."""
+        ref = cmd.rest_args if cmd.args else ""
+        return CommandResult(
+            success=True,
+            action="tab_new",
+            data={"ref": ref} if ref else None,
+        )
+
+    def _cmd_tabclose(self, cmd: ParsedCommand) -> CommandResult:
+        """Handle :tabclose command."""
+        return CommandResult(success=True, action="tab_close")
+
+    def _cmd_tabname(self, cmd: ParsedCommand) -> CommandResult:
+        """Handle :tabname command."""
+        name = cmd.rest_args if cmd.args else ""
+        if not name:
+            return CommandResult(
+                success=False,
+                message="Gebruik: :tabname <naam>",
+            )
+        return CommandResult(
+            success=True,
+            action="tab_name",
+            data={"name": name},
+        )
 
     def get_bookmarks(self) -> List[Bookmark]:
         """Get all bookmarks."""

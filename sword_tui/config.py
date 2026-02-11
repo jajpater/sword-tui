@@ -22,6 +22,8 @@ class Config:
     default_reference: str = "Gen 1:1"
     strongs_greek_modules: List[str] = field(default_factory=lambda: DEFAULT_GREEK_MODULES.copy())
     strongs_hebrew_modules: List[str] = field(default_factory=lambda: DEFAULT_HEBREW_MODULES.copy())
+    tabs: List[dict] = field(default_factory=list)
+    active_tab: int = 0
 
     @classmethod
     def load(cls) -> "Config":
@@ -37,6 +39,8 @@ class Config:
                     default_reference=data.get("default_reference", "Gen 1:1"),
                     strongs_greek_modules=data.get("strongs_greek_modules", DEFAULT_GREEK_MODULES.copy()),
                     strongs_hebrew_modules=data.get("strongs_hebrew_modules", DEFAULT_HEBREW_MODULES.copy()),
+                    tabs=data.get("tabs", []),
+                    active_tab=data.get("active_tab", 0),
                 )
         except (json.JSONDecodeError, OSError):
             return cls()
@@ -49,6 +53,8 @@ class Config:
             "default_reference": self.default_reference,
             "strongs_greek_modules": self.strongs_greek_modules,
             "strongs_hebrew_modules": self.strongs_hebrew_modules,
+            "tabs": self.tabs,
+            "active_tab": self.active_tab,
         }
         with open(CONFIG_FILE, "w") as f:
             json.dump(data, f, indent=2)

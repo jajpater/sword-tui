@@ -12,6 +12,7 @@ from sword_tui.backend import DiathekeBackend, get_installed_modules, DiathekeFi
 from sword_tui.config import get_config
 from sword_tui.commands import CommandHandler, parse_command
 from sword_tui.jumplist import JumpList
+from sword_tui.tab_state import TabState, TabManager
 from sword_tui.data import (
     BOOK_ORDER,
     book_chapters,
@@ -34,6 +35,7 @@ from sword_tui.widgets import (
     StrongsView,
     StudyView,
     StudyGotoRef,
+    TabBar,
 )
 
 
@@ -147,7 +149,15 @@ class SwordApp(App):
         self._jumplist = JumpList()
         self._in_jumplist_mode = False
 
-        # Key sequence buffer (for gg)
+        # Tab manager
+        if self._config.tabs:
+            self._tab_manager = TabManager.from_list(
+                self._config.tabs, self._config.active_tab
+            )
+        else:
+            self._tab_manager = TabManager()
+
+        # Key sequence buffer (for gg, gt, gT, Ngt)
         self._key_buffer = ""
 
         # Secondary module for parallel view
@@ -173,6 +183,7 @@ class SwordApp(App):
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
         yield Header()
+        yield TabBar(id="tab-bar")
         # Normal single-pane view
         with VerticalScroll(id="bible-scroll"):
             yield BibleView(id="bible-view")
@@ -207,11 +218,19 @@ class SwordApp(App):
         self.query_one("#jumplist-view").display = False
         self.query_one("#study-view").display = False
 
+        # Hide tab bar when only 1 tab
+        self.query_one("#tab-bar").display = False
+
         # Initialize status bar with filters
         self.query_one("#status-bar", StatusBar).set_filters(self._diatheke_filters)
 
-        # Load initial content
-        self._load_chapter()
+        # Restore saved tab state if available
+        if self._config.tabs:
+            self._restore_tab_state()
+            self._update_tab_bar()
+        else:
+            # Load initial content
+            self._load_chapter()
 
         # Focus the main scroll area
         self.query_one("#bible-scroll").focus()
@@ -433,18 +452,53 @@ class SwordApp(App):
                 self._search_preview_module_picker()
             return
 
-        # Handle gg sequence (go to first verse)
+        # Handle multi-key sequences: gg, gt, gT, Ngt
+        if char and char.isdigit() and self._tab_manager.count > 1:
+            # Accumulate digit only if buffer doesn't already contain "g"
+            if "g" not in self._key_buffer:
+                self._key_buffer += char
+                return
+
         if char == "g":
             if self._key_buffer == "g":
+                # gg → first verse
                 self._key_buffer = ""
                 self.action_first_verse()
                 event.stop()
                 return
+            elif self._key_buffer and self._key_buffer[-1:].isdigit():
+                # Digits followed by g → wait for t
+                self._key_buffer += "g"
+                return
             else:
                 self._key_buffer = "g"
                 return
+        elif char == "t" and self._key_buffer.endswith("g"):
+            event.stop()
+            if self._key_buffer == "g":
+                # gt → next tab
+                self._key_buffer = ""
+                self._tab_next()
+                return
+            else:
+                # Ngt → go to tab N
+                digits = self._key_buffer[:-1]  # strip trailing "g"
+                self._key_buffer = ""
+                try:
+                    n = int(digits)
+                    if 1 <= n <= self._tab_manager.count:
+                        self._switch_tab(n - 1)
+                except ValueError:
+                    pass
+                return
+        elif char == "T" and self._key_buffer == "g":
+            # gT → prev tab
+            self._key_buffer = ""
+            event.stop()
+            self._tab_prev()
+            return
         else:
-            # Clear key buffer on other keys
+            # Clear key buffer on any other key
             self._key_buffer = ""
 
         # Handle colon for command/verse mode
@@ -457,6 +511,10 @@ class SwordApp(App):
             self._enter_kwic_search_mode()
 
     # ==================== Actions ====================
+
+    def action_quit(self) -> None:
+        """Override quit to save tab state first."""
+        self._save_and_exit()
 
     def action_next_verse(self) -> None:
         """Move to next verse (j key) - in Strong's mode with dict pane: scroll down."""
@@ -1996,6 +2054,263 @@ class SwordApp(App):
         if self._in_jumplist_mode:
             self.action_toggle_jumplist()
 
+    # ==================== Tab Management ====================
+
+    def _capture_tab_state(self) -> None:
+        """Save all current app state into the active tab."""
+        tab = self._tab_manager.active
+
+        # Get current verse
+        if self._in_study_mode:
+            study = self.query_one("#study-view", StudyView)
+            tab.verse = study.bible_pane.current_verse or 1
+        elif self._in_parallel_mode:
+            view = self._get_active_view()
+            tab.verse = view.current_verse
+        else:
+            view = self.query_one("#bible-view", BibleView)
+            tab.verse = view.current_verse
+
+        # Navigation
+        tab.book = self._current_book
+        tab.chapter = self._current_chapter
+        tab.module = self._current_module
+
+        # Modes
+        tab.in_parallel_mode = self._in_parallel_mode
+        tab.in_study_mode = self._in_study_mode
+        tab.in_strongs_mode = self._in_strongs_mode
+        tab.in_crossref_mode = self._in_crossref_mode
+        tab.in_jumplist_mode = self._in_jumplist_mode
+
+        # Parallel
+        tab.secondary_module = self._secondary_module
+        tab.right_book = self._right_book
+        tab.right_chapter = self._right_chapter
+        tab.panes_linked = self._panes_linked
+        tab.active_pane = self._active_pane
+
+        # Study
+        tab.study_commentary_module = self._study_commentary_module
+        tab.study_active_pane = self._study_active_pane
+        tab.study_include_bible_xrefs = self._study_include_bible_xrefs
+
+        # Filters
+        tab.strongs_filter = self._diatheke_filters.strongs
+        tab.footnotes_filter = self._diatheke_filters.footnotes
+
+        # Focus
+        tab.crossref_pane_focused = self._crossref_pane_focused
+        tab.strongs_pane_focused = self._strongs_pane_focused
+
+        # Jumplist (reference, not serialized)
+        tab._jumplist_ref = self._jumplist
+
+        # Auto-name: "Book Chapter"
+        if not tab.name:
+            tab.name = f"{tab.book} {tab.chapter}"
+
+    def _restore_tab_state(self) -> None:
+        """Restore app state from the active tab."""
+        tab = self._tab_manager.active
+
+        # First reset all views
+        self._reset_all_views()
+
+        # Restore navigation
+        self._current_book = tab.book
+        self._current_chapter = tab.chapter
+        self._current_module = tab.module
+        self._backend.set_module(self._current_module)
+
+        # Restore modes
+        self._in_parallel_mode = tab.in_parallel_mode
+        self._in_study_mode = tab.in_study_mode
+        self._in_strongs_mode = tab.in_strongs_mode
+        self._in_crossref_mode = tab.in_crossref_mode
+        self._in_jumplist_mode = tab.in_jumplist_mode
+
+        # Restore parallel state
+        self._secondary_module = tab.secondary_module
+        self._right_book = tab.right_book
+        self._right_chapter = tab.right_chapter
+        self._panes_linked = tab.panes_linked
+        self._active_pane = tab.active_pane
+
+        # Restore study state
+        self._study_commentary_module = tab.study_commentary_module
+        self._study_active_pane = tab.study_active_pane
+        self._study_include_bible_xrefs = tab.study_include_bible_xrefs
+
+        # Restore filters
+        self._diatheke_filters.strongs = tab.strongs_filter
+        self._diatheke_filters.footnotes = tab.footnotes_filter
+        self._backend.set_filters(self._diatheke_filters)
+        self.query_one("#status-bar", StatusBar).set_filters(self._diatheke_filters)
+
+        # Restore focus state
+        self._crossref_pane_focused = tab.crossref_pane_focused
+        self._strongs_pane_focused = tab.strongs_pane_focused
+
+        # Restore jumplist
+        self._jumplist = tab._jumplist_ref
+
+        # Apply the view state
+        self._apply_view_state(tab)
+
+        # Update status bar
+        self._update_status()
+
+    def _reset_all_views(self) -> None:
+        """Hide all views and reset transient modes."""
+        self.query_one("#bible-scroll").display = False
+        self.query_one("#parallel-view").display = False
+        self.query_one("#search-view").display = False
+        self.query_one("#strongs-view").display = False
+        self.query_one("#crossref-view").display = False
+        self.query_one("#jumplist-view").display = False
+        self.query_one("#study-view").display = False
+
+        self._in_visual_mode = False
+        self._in_command_mode = False
+
+    def _apply_view_state(self, tab: TabState) -> None:
+        """Show the correct views and load content based on tab modes."""
+        status = self.query_one("#status-bar", StatusBar)
+
+        if tab.in_study_mode:
+            self.query_one("#study-view").display = True
+            self._load_study_view(verse=tab.verse)
+            status.set_mode("study")
+        elif tab.in_parallel_mode:
+            # Set up secondary backend
+            if tab.secondary_module:
+                self._secondary_backend = DiathekeBackend(tab.secondary_module)
+                self._secondary_backend.set_filters(self._diatheke_filters)
+            self.query_one("#parallel-view").display = True
+            self._load_parallel_chapter()
+            # Move to saved verse
+            parallel = self.query_one("#parallel-view", ParallelView)
+            parallel.query_one("#left-view", BibleView).move_to_verse(tab.verse)
+            if self._panes_linked:
+                parallel.query_one("#right-view", BibleView).move_to_verse(tab.verse)
+            status.set_mode("parallel")
+        else:
+            self.query_one("#bible-scroll").display = True
+            self._load_chapter()
+            self.query_one("#bible-view", BibleView).move_to_verse(tab.verse)
+            status.set_mode("normal")
+
+        # Restore side panels
+        if tab.in_strongs_mode:
+            self.query_one("#strongs-view").display = True
+            self._update_strongs_words_in_verse()
+            self._lookup_current_strongs()
+            status.set_mode("strongs")
+
+        if tab.in_crossref_mode:
+            self.query_one("#crossref-view").display = True
+            self._load_crossrefs_for_current_verse()
+            status.set_mode("crossref")
+
+        if tab.in_jumplist_mode:
+            self.query_one("#jumplist-view").display = True
+            jumplist_view = self.query_one("#jumplist-view", JumpListView)
+            jumplist_view.update_entries(self._jumplist.entries, self._jumplist.cursor)
+
+    def _switch_tab(self, index: int) -> None:
+        """Switch to tab at given index."""
+        if index == self._tab_manager.active_index:
+            return
+        self._capture_tab_state()
+        if self._tab_manager.switch_to(index):
+            self._restore_tab_state()
+            self._update_tab_bar()
+
+    def _tab_new(self, ref: str = "") -> None:
+        """Create a new tab, optionally at a parsed reference."""
+        self._capture_tab_state()
+
+        new_state = TabState(
+            module=self._current_module,
+        )
+
+        if ref:
+            from sword_tui.commands.parser import parse_reference
+            from sword_tui.data.aliases import resolve_alias
+            parsed = parse_reference(ref)
+            if parsed:
+                book, chapter, verse, _ = parsed
+                canonical = resolve_alias(book)
+                if canonical:
+                    new_state.book = canonical
+                    new_state.chapter = chapter
+                    new_state.verse = verse or 1
+
+        idx = self._tab_manager.new_tab(new_state)
+        if idx < 0:
+            self.query_one("#status-bar", StatusBar).show_message(
+                f"Maximum {TabManager.MAX_TABS} tabs bereikt"
+            )
+            return
+
+        self._restore_tab_state()
+        self._update_tab_bar()
+        self.query_one("#status-bar", StatusBar).show_message(
+            f"Tab {idx + 1}: {new_state.book} {new_state.chapter}"
+        )
+
+    def _tab_close(self) -> None:
+        """Close the current tab."""
+        if not self._tab_manager.close_tab():
+            self.query_one("#status-bar", StatusBar).show_message(
+                "Kan laatste tab niet sluiten"
+            )
+            return
+
+        self._restore_tab_state()
+        self._update_tab_bar()
+
+    def _tab_next(self) -> None:
+        """Switch to the next tab."""
+        if self._tab_manager.count <= 1:
+            return
+        self._capture_tab_state()
+        self._tab_manager.next_tab()
+        self._restore_tab_state()
+        self._update_tab_bar()
+
+    def _tab_prev(self) -> None:
+        """Switch to the previous tab."""
+        if self._tab_manager.count <= 1:
+            return
+        self._capture_tab_state()
+        self._tab_manager.prev_tab()
+        self._restore_tab_state()
+        self._update_tab_bar()
+
+    def _update_tab_bar(self) -> None:
+        """Update the TabBar widget. Hide when only 1 tab."""
+        tab_bar = self.query_one("#tab-bar", TabBar)
+        if self._tab_manager.count <= 1:
+            tab_bar.display = False
+            return
+
+        tab_bar.display = True
+        names = []
+        for tab in self._tab_manager.tabs:
+            name = tab.name or f"{tab.book} {tab.chapter}"
+            names.append(name)
+        tab_bar.update_tabs(names, self._tab_manager.active_index)
+
+    def _save_and_exit(self) -> None:
+        """Capture tab state, save to config, then exit."""
+        self._capture_tab_state()
+        self._config.tabs = self._tab_manager.to_list()
+        self._config.active_tab = self._tab_manager.active_index
+        self._config.save()
+        self.exit()
+
     # ==================== Helper Methods ====================
 
     def _get_active_book(self) -> str:
@@ -2181,7 +2496,21 @@ class SwordApp(App):
         action = result.action
 
         if action == "quit":
-            self.exit()
+            self._save_and_exit()
+        elif action == "tab_new":
+            data = result.data or {}
+            self._tab_new(ref=data.get("ref", ""))
+        elif action == "tab_close":
+            self._tab_close()
+        elif action == "tab_name":
+            data = result.data or {}
+            name = data.get("name", "")
+            if name:
+                self._tab_manager.active.name = name
+                self._update_tab_bar()
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Tab hernoemd: {name}"
+                )
         elif action == "goto":
             self._record_jump()
             data = result.data or {}
