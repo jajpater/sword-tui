@@ -2,7 +2,6 @@
 
 import html
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -10,6 +9,7 @@ from typing import List, Optional, Tuple
 from sword_tui.data.types import CrossReference
 from sword_tui.data.canon import resolve_alias, DIATHEKE_TO_CANON, diatheke_token
 from sword_tui.backend.crossref import _BOOK_ABBREVS, _SCRIPREF_PATTERN, CROSSREF_MODULES, parse_osis_refs
+from sword_tui.backend.modules import get_installed_modules
 
 
 @dataclass
@@ -51,9 +51,6 @@ _SIMPLE_REF = re.compile(
 class CommentaryBackend:
     """Interface to commentary SWORD modules."""
 
-    # Known commentary modules
-    COMMENTARY_MODULES = ["DutKant", "TSK", "MHC", "Geneva", "Catena"]
-
     def __init__(self, default_module: Optional[str] = None):
         """Initialize the commentary backend.
 
@@ -77,28 +74,13 @@ class CommentaryBackend:
         return len(self.available_modules) > 0
 
     def _detect_modules(self) -> None:
-        """Detect available commentary modules."""
+        """Detect available commentary modules via diatheke modulelist."""
         self._checked = True
 
-        if not shutil.which("diatheke"):
-            return
-
-        for mod in self.COMMENTARY_MODULES:
-            if self._module_exists(mod):
-                self._available_modules.append(mod)
-
-    def _module_exists(self, module: str) -> bool:
-        """Check if a module is installed."""
-        try:
-            proc = subprocess.run(
-                ["diatheke", "-b", module, "-k", "John 3:16"],
-                capture_output=True,
-                timeout=5,
-            )
-            stderr = proc.stderr.decode("utf-8", errors="replace")
-            return proc.returncode == 0 and "not be found" not in stderr
-        except (subprocess.TimeoutExpired, OSError):
-            return False
+        modules = get_installed_modules()
+        self._available_modules = [
+            m.name for m in modules if m.module_type == "Commentaries"
+        ]
 
     def lookup(
         self,

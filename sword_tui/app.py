@@ -36,6 +36,7 @@ from sword_tui.widgets import (
     StudyView,
     StudyGotoRef,
     TabBar,
+    CommentaryPicker,
 )
 
 
@@ -423,6 +424,23 @@ class SwordApp(App):
                 )
                 self._load_study_commentary(study.bible_pane.current_verse)
                 return
+            elif char == "M":
+                event.stop()
+                event.prevent_default()
+                mods = self._commentary_backend.available_modules
+                if mods and len(mods) > 1:
+                    self._in_picker_mode = True
+                    picker = CommentaryPicker(
+                        modules=mods,
+                        current_module=self._study_commentary_module,
+                    )
+                    self.mount(picker)
+                    picker.focus()
+                elif mods:
+                    self.query_one("#status-bar", StatusBar).show_message(
+                        f"Alleen {self._study_commentary_module} beschikbaar"
+                    )
+                return
 
         # Handle search mode keys
         if self._in_search_mode:
@@ -518,6 +536,9 @@ class SwordApp(App):
 
     def action_next_verse(self) -> None:
         """Move to next verse (j key) - in Strong's mode with dict pane: scroll down."""
+        if self._in_picker_mode:
+            return
+
         # In crossref mode with crossref pane focused, j/k handled by on_key
         if self._in_crossref_mode and self._crossref_pane_focused:
             return
@@ -549,6 +570,9 @@ class SwordApp(App):
 
     def action_prev_verse(self) -> None:
         """Move to previous verse (k key) - in Strong's mode with dict pane: scroll up."""
+        if self._in_picker_mode:
+            return
+
         # In crossref mode with crossref pane focused, j/k handled by on_key
         if self._in_crossref_mode and self._crossref_pane_focused:
             return
@@ -1942,13 +1966,32 @@ class SwordApp(App):
         """Handle dictionary module picker cancellation."""
         self._close_picker()
 
+    def on_commentary_picker_commentary_selected(
+        self, event: CommentaryPicker.CommentarySelected
+    ) -> None:
+        """Handle commentary module selection."""
+        self._close_picker()
+        self._study_commentary_module = event.module
+        if self._in_study_mode:
+            study = self.query_one("#study-view", StudyView)
+            self._load_study_commentary(study.bible_pane.current_verse)
+        self.query_one("#status-bar", StatusBar).show_message(
+            f"Commentaar: {event.module}"
+        )
+
+    def on_commentary_picker_cancelled(
+        self, event: CommentaryPicker.Cancelled
+    ) -> None:
+        """Handle commentary picker cancellation."""
+        self._close_picker()
+
     def _close_picker(self) -> None:
         """Close any open picker."""
         self._in_picker_mode = False
         self._picking_search_preview_module = False
         self._picking_secondary_module = False
         self._picking_dict_modules = False
-        for picker in self.query("BookPicker, ModulePicker, DictModulePicker"):
+        for picker in self.query("BookPicker, ModulePicker, DictModulePicker, CommentaryPicker"):
             picker.remove()
         if self._in_search_mode:
             self.query_one("#search-view", SearchView).focus()

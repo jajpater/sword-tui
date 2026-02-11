@@ -14,6 +14,7 @@ from sword_tui.widgets.crossref_view import CrossRefView, CrossRefSelected
 from sword_tui.widgets.jumplist_view import JumpListView, JumpListSelected
 from sword_tui.widgets.study_view import StudyView, StudyGotoRef
 from sword_tui.widgets.tab_bar import TabBar
+from sword_tui.widgets.commentary_picker import CommentaryPicker
 
 __all__ = [
     "BibleView",
@@ -33,4 +34,5 @@ __all__ = [
     "StudyView",
     "StudyGotoRef",
     "TabBar",
+    "CommentaryPicker",
 ]
