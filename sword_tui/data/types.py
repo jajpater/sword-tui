@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -77,9 +77,9 @@ class CrossReference:
 class Bookmark:
     """A saved bookmark."""
 
-    name: str
-    book: str
-    chapter: int
+    tags: List[str] = field(default_factory=list)
+    book: str = ""
+    chapter: int = 0
     verse: Optional[int] = None
     module: str = ""
     created: datetime = field(default_factory=datetime.now)
@@ -91,10 +91,15 @@ class Bookmark:
             return f"{self.book} {self.chapter}:{self.verse}"
         return f"{self.book} {self.chapter}"
 
+    @property
+    def display_name(self) -> str:
+        """Return display name from tags or reference."""
+        return ", ".join(self.tags) if self.tags else self.reference
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            "name": self.name,
+            "tags": self.tags,
             "book": self.book,
             "chapter": self.chapter,
             "verse": self.verse,
@@ -110,11 +115,80 @@ class Bookmark:
             created = datetime.fromisoformat(created)
         else:
             created = datetime.now()
+        # Backward compat: old format uses "name", new uses "tags"
+        if "tags" in data:
+            tags = data["tags"]
+        elif "name" in data:
+            tags = [data["name"]]
+        else:
+            tags = []
         return cls(
-            name=data["name"],
+            tags=tags,
             book=data["book"],
             chapter=data["chapter"],
             verse=data.get("verse"),
             module=data.get("module", ""),
+            created=created,
+        )
+
+
+@dataclass
+class VerseRef:
+    """A reference to a single verse."""
+
+    book: str
+    chapter: int
+    verse: int
+
+    @property
+    def reference(self) -> str:
+        """Return formatted reference string."""
+        return f"{self.book} {self.chapter}:{self.verse}"
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "book": self.book,
+            "chapter": self.chapter,
+            "verse": self.verse,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "VerseRef":
+        """Create from dictionary."""
+        return cls(
+            book=data["book"],
+            chapter=int(data["chapter"]),
+            verse=int(data["verse"]),
+        )
+
+
+@dataclass
+class VerseList:
+    """A named list of verse references."""
+
+    name: str
+    refs: List[VerseRef] = field(default_factory=list)
+    created: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "name": self.name,
+            "refs": [r.to_dict() for r in self.refs],
+            "created": self.created.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "VerseList":
+        """Create from dictionary."""
+        created = data.get("created")
+        if isinstance(created, str):
+            created = datetime.fromisoformat(created)
+        else:
+            created = datetime.now()
+        return cls(
+            name=data["name"],
+            refs=[VerseRef.from_dict(r) for r in data.get("refs", [])],
             created=created,
         )

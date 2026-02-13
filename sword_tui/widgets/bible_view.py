@@ -34,6 +34,7 @@ class VerseRow(Static):
         self._is_selected = False
         self._search_query = ""
         self._show_strongs = show_strongs
+        self._bookmark_color = ""
 
     def set_state(
         self,
@@ -41,12 +42,14 @@ class VerseRow(Static):
         is_selected: bool = False,
         search_query: str = "",
         show_strongs: bool = False,
+        bookmark_color: str = "",
     ) -> None:
         """Update the verse state and re-render."""
         self._is_current = is_current
         self._is_selected = is_selected
         self._search_query = search_query
         self._show_strongs = show_strongs
+        self._bookmark_color = bookmark_color
         self._render_verse()
 
         # Update CSS classes
@@ -55,6 +58,16 @@ class VerseRow(Static):
             self.add_class("current")
         elif is_selected:
             self.add_class("selected")
+
+    # Map color names to Rich background/foreground styles
+    COLOR_MAP = {
+        "red": ("on dark_red", "bold red"),
+        "green": ("on dark_green", "bold green"),
+        "blue": ("on dark_blue", "bold blue"),
+        "yellow": ("on #333300", "bold yellow"),
+        "magenta": ("on dark_magenta", "bold magenta"),
+        "cyan": ("on dark_cyan", "bold cyan"),
+    }
 
     def _render_verse(self) -> None:
         """Render the verse with formatting."""
@@ -71,6 +84,8 @@ class VerseRow(Static):
             verse_style = "bold black on cyan"
         elif self._is_selected:
             verse_style = "bold black on yellow"
+        elif self._bookmark_color and self._bookmark_color in self.COLOR_MAP:
+            verse_style = self.COLOR_MAP[self._bookmark_color][1]
         else:
             verse_style = "bold yellow"
         text.append(f"{self.segment.verse}", style=verse_style)
@@ -80,6 +95,8 @@ class VerseRow(Static):
         base_style = ""
         if self._is_selected and not self._is_current:
             base_style = "on #333300"
+        elif self._bookmark_color and self._bookmark_color in self.COLOR_MAP and not self._is_current:
+            base_style = self.COLOR_MAP[self._bookmark_color][0]
 
         if self._show_strongs and self.segment.words:
             self._append_with_strongs(text, base_style)
@@ -151,6 +168,16 @@ class BibleView(Vertical):
         self._visual_mode = False
         self._verse_widgets: dict[int, VerseRow] = {}
         self._show_strongs = False
+        self._bookmark_colors: dict[int, str] = {}
+
+    def set_bookmark_colors(self, colors: dict[int, str]) -> None:
+        """Set bookmark highlight colors for verses.
+
+        Args:
+            colors: Dict mapping verse number to color name.
+        """
+        self._bookmark_colors = colors
+        self._update_verse_states()
 
     @property
     def current_verse(self) -> int:
@@ -207,7 +234,8 @@ class BibleView(Vertical):
             widget = VerseRow(seg, show_strongs=self._show_strongs)
             is_current = seg.verse == self._current_verse
             is_selected = self._visual_mode and vis_start <= seg.verse <= vis_end
-            widget.set_state(is_current, is_selected, self._search_query, self._show_strongs)
+            bm_color = self._bookmark_colors.get(seg.verse, "")
+            widget.set_state(is_current, is_selected, self._search_query, self._show_strongs, bm_color)
             self._verse_widgets[seg.verse] = widget
             self.mount(widget)
 
@@ -218,7 +246,8 @@ class BibleView(Vertical):
         for verse_num, widget in self._verse_widgets.items():
             is_current = verse_num == self._current_verse
             is_selected = self._visual_mode and vis_start <= verse_num <= vis_end
-            widget.set_state(is_current, is_selected, self._search_query, self._show_strongs)
+            bm_color = self._bookmark_colors.get(verse_num, "")
+            widget.set_state(is_current, is_selected, self._search_query, self._show_strongs, bm_color)
 
     def _scroll_to_current(self) -> None:
         """Scroll to make current verse visible."""

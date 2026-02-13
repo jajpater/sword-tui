@@ -13,6 +13,7 @@ from sword_tui.widgets.dict_module_picker import DictModulePicker
 from sword_tui.widgets.crossref_view import CrossRefView, CrossRefSelected
 from sword_tui.widgets.jumplist_view import JumpListView, JumpListSelected
 from sword_tui.widgets.study_view import StudyView, StudyGotoRef
+from sword_tui.widgets.verselist_view import VerseListView, VerseListGotoRef, VerseListDeleteRef
 from sword_tui.widgets.tab_bar import TabBar
 from sword_tui.widgets.commentary_picker import CommentaryPicker
 
@@ -33,6 +34,9 @@ __all__ = [
     "JumpListSelected",
     "StudyView",
     "StudyGotoRef",
+    "VerseListView",
+    "VerseListGotoRef",
+    "VerseListDeleteRef",
     "TabBar",
     "CommentaryPicker",
 ]

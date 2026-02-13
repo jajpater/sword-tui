@@ -40,6 +40,7 @@ COMMAND_ALIASES: Dict[str, str] = {
     "p": "parallel",
     "tn": "tabnew",
     "tc": "tabclose",
+    "vl": "verselist",
 }
 
 
@@ -124,6 +125,8 @@ def get_command_names() -> List[str]:
         "tabnew",
         "tabclose",
         "tabname",
+        "jumps",
+        "verselist",
     ]
 
 

@@ -14,6 +14,23 @@ class JumpEntry:
     chapter: int
     verse: int
 
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "book": self.book,
+            "chapter": self.chapter,
+            "verse": self.verse,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "JumpEntry":
+        """Create from dictionary."""
+        return cls(
+            book=data["book"],
+            chapter=int(data["chapter"]),
+            verse=int(data["verse"]),
+        )
+
 
 class JumpList:
     """Navigation history with back/forward support.
@@ -97,3 +114,18 @@ class JumpList:
             return None
         self._cursor = index
         return self._entries[self._cursor]
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "entries": [e.to_dict() for e in self._entries],
+            "cursor": self._cursor,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "JumpList":
+        """Deserialize from dictionary."""
+        jl = cls()
+        jl._entries = [JumpEntry.from_dict(e) for e in data.get("entries", [])]
+        jl._cursor = data.get("cursor", len(jl._entries) - 1)
+        return jl

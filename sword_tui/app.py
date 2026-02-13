@@ -12,6 +12,7 @@ from sword_tui.backend import DiathekeBackend, get_installed_modules, DiathekeFi
 from sword_tui.config import get_config
 from sword_tui.commands import CommandHandler, parse_command
 from sword_tui.jumplist import JumpList
+from sword_tui.verselist import VerseListManager
 from sword_tui.tab_state import TabState, TabManager
 from sword_tui.data import (
     BOOK_ORDER,
@@ -35,6 +36,9 @@ from sword_tui.widgets import (
     StrongsView,
     StudyView,
     StudyGotoRef,
+    VerseListView,
+    VerseListGotoRef,
+    VerseListDeleteRef,
     TabBar,
     CommentaryPicker,
 )
@@ -83,6 +87,7 @@ class SwordApp(App):
         Binding("ctrl+o", "jump_back", "Jump back", show=False),
         Binding("ctrl+i", "jump_forward", "Jump forward", show=False),
         Binding("ctrl+j", "toggle_jumplist", "Jumplist", show=False),
+        Binding("V", "add_to_verselist", "Add to verselist", show=False),
     ]
 
     def __init__(self) -> None:
@@ -150,6 +155,11 @@ class SwordApp(App):
         self._jumplist = JumpList()
         self._in_jumplist_mode = False
 
+        # Verse lists
+        self._vl_manager = VerseListManager()
+        self._active_verselist = ""
+        self._in_verselist_mode = False
+
         # Tab manager
         if self._config.tabs:
             self._tab_manager = TabManager.from_list(
@@ -200,6 +210,8 @@ class SwordApp(App):
         yield JumpListView(id="jumplist-view")
         # Study view - 3-pane interface (initially hidden)
         yield StudyView(id="study-view")
+        # Verselist view - 2/3-pane interface (initially hidden)
+        yield VerseListView(id="verselist-view")
         yield CommandInput(
             commands=["quit", "help", "module", "export", "goto"],
             id="command-input",
@@ -218,6 +230,7 @@ class SwordApp(App):
         self.query_one("#crossref-view").display = False
         self.query_one("#jumplist-view").display = False
         self.query_one("#study-view").display = False
+        self.query_one("#verselist-view").display = False
 
         # Hide tab bar when only 1 tab
         self.query_one("#tab-bar").display = False
@@ -243,6 +256,68 @@ class SwordApp(App):
 
         char = event.character
         key = event.key
+
+        # Handle Verselist mode keys
+        if self._in_verselist_mode:
+            if key == "escape":
+                event.stop()
+                self._toggle_verselist_view()
+                return
+            elif key == "tab":
+                event.stop()
+                vl_view = self.query_one("#verselist-view", VerseListView)
+                vl_view.next_pane()
+                return
+            elif char == "j" or key == "down":
+                event.stop()
+                vl_view = self.query_one("#verselist-view", VerseListView)
+                if vl_view.active_pane == 0:
+                    vl_view.next_ref()
+                    # Update commentary if visible
+                    ref = vl_view.get_selected_ref()
+                    if ref:
+                        vl_view.update_commentary_for_ref(ref)
+                return
+            elif char == "k" or key == "up":
+                event.stop()
+                vl_view = self.query_one("#verselist-view", VerseListView)
+                if vl_view.active_pane == 0:
+                    vl_view.prev_ref()
+                    ref = vl_view.get_selected_ref()
+                    if ref:
+                        vl_view.update_commentary_for_ref(ref)
+                return
+            elif key == "enter":
+                event.stop()
+                vl_view = self.query_one("#verselist-view", VerseListView)
+                ref = vl_view.get_selected_ref()
+                if ref:
+                    self.post_message(VerseListGotoRef(ref))
+                return
+            elif char == "d":
+                event.stop()
+                vl_view = self.query_one("#verselist-view", VerseListView)
+                idx = vl_view.get_selected_index()
+                self.post_message(VerseListDeleteRef(idx))
+                return
+            elif char == "c":
+                event.stop()
+                vl_view = self.query_one("#verselist-view", VerseListView)
+                vl_view.toggle_commentary()
+                return
+            elif char == "m":
+                event.stop()
+                # Open commentary picker for verselist
+                self._in_picker_mode = True
+                picker = CommentaryPicker(current_module=self._study_commentary_module)
+                self.mount(picker)
+                picker.focus()
+                return
+            elif char == ":" or char == "/":
+                pass  # Fall through to normal command mode handling
+            else:
+                event.stop()
+                return
 
         # Handle Strong's mode keys
         if self._in_strongs_mode:
@@ -536,7 +611,7 @@ class SwordApp(App):
 
     def action_next_verse(self) -> None:
         """Move to next verse (j key) - in Strong's mode with dict pane: scroll down."""
-        if self._in_picker_mode:
+        if self._in_picker_mode or self._in_verselist_mode:
             return
 
         # In crossref mode with crossref pane focused, j/k handled by on_key
@@ -570,7 +645,7 @@ class SwordApp(App):
 
     def action_prev_verse(self) -> None:
         """Move to previous verse (k key) - in Strong's mode with dict pane: scroll up."""
-        if self._in_picker_mode:
+        if self._in_picker_mode or self._in_verselist_mode:
             return
 
         # In crossref mode with crossref pane focused, j/k handled by on_key
@@ -891,16 +966,11 @@ class SwordApp(App):
             view = self.query_one("#bible-view", BibleView)
             start, end = view.get_visual_range()
 
-        if start == end:
-            ref = f"{self._current_book} {self._current_chapter}:{start}"
-        else:
-            ref = f"{self._current_book} {self._current_chapter}:{start}-{end}"
-
-        # Add bookmark via command handler
+        # Add bookmark via command handler with current book as tag
         if self._command_handler:
             from sword_tui.data.types import Bookmark
             bookmark = Bookmark(
-                name=ref,
+                tags=[self._current_book],
                 book=self._current_book,
                 chapter=self._current_chapter,
                 verse=start,
@@ -908,7 +978,8 @@ class SwordApp(App):
             )
             self._command_handler._bookmarks.append(bookmark)
             self._command_handler._save_bookmarks()
-            status.show_message(f"Bookmark: {ref}")
+            status.show_message(f"Bookmark: {bookmark.reference}")
+            self._apply_bookmark_colors()
 
         # Exit visual mode after bookmark
         if self._in_visual_mode:
@@ -931,10 +1002,9 @@ class SwordApp(App):
             if not bookmarks:
                 self.query_one("#status-bar", StatusBar).show_message("Geen bookmarks")
             else:
-                # Show first few bookmarks in status bar for now
-                refs = [bm.reference for bm in bookmarks[:5]]
+                parts = [bm.display_name for bm in bookmarks[:5]]
                 self.query_one("#status-bar", StatusBar).show_message(
-                    f"Bookmarks: {', '.join(refs)}"
+                    f"Bookmarks: {', '.join(parts)}"
                 )
 
     def action_module_picker(self) -> None:
@@ -2097,6 +2167,33 @@ class SwordApp(App):
         if self._in_jumplist_mode:
             self.action_toggle_jumplist()
 
+    # ==================== VerseList Messages ====================
+
+    def on_verse_list_goto_ref(self, message: VerseListGotoRef) -> None:
+        """Handle verselist goto: close verselist view and navigate."""
+        ref = message.ref
+        self._toggle_verselist_view()
+        self._record_jump()
+        self._current_book = ref.book
+        self._current_chapter = ref.chapter
+        self._load_chapter()
+        view = self._get_active_view()
+        view.move_to_verse(ref.verse)
+        self._update_status()
+
+    def on_verse_list_delete_ref(self, message: VerseListDeleteRef) -> None:
+        """Handle verselist delete ref."""
+        if not self._active_verselist:
+            return
+        if self._vl_manager.remove_ref(self._active_verselist, message.index):
+            vl = self._vl_manager.get(self._active_verselist)
+            if vl:
+                vl_view = self.query_one("#verselist-view", VerseListView)
+                vl_view.load_verselist(vl, self._backend)
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Vers verwijderd uit '{self._active_verselist}'"
+                )
+
     # ==================== Tab Management ====================
 
     def _capture_tab_state(self) -> None:
@@ -2213,9 +2310,11 @@ class SwordApp(App):
         self.query_one("#crossref-view").display = False
         self.query_one("#jumplist-view").display = False
         self.query_one("#study-view").display = False
+        self.query_one("#verselist-view").display = False
 
         self._in_visual_mode = False
         self._in_command_mode = False
+        self._in_verselist_mode = False
 
     def _apply_view_state(self, tab: TabState) -> None:
         """Show the correct views and load content based on tab modes."""
@@ -2260,6 +2359,8 @@ class SwordApp(App):
             self.query_one("#jumplist-view").display = True
             jumplist_view = self.query_one("#jumplist-view", JumpListView)
             jumplist_view.update_entries(self._jumplist.entries, self._jumplist.cursor)
+
+        self._apply_bookmark_colors()
 
     def _switch_tab(self, index: int) -> None:
         """Switch to tab at given index."""
@@ -2352,7 +2453,42 @@ class SwordApp(App):
         self._config.tabs = self._tab_manager.to_list()
         self._config.active_tab = self._tab_manager.active_index
         self._config.save()
+        self._save_jumplists()
         self.exit()
+
+    def _save_jumplists(self, name: str = "") -> None:
+        """Save current jumplist to disk."""
+        import json
+        jl_dir = Path.home() / ".config" / "sword-tui" / "jumplists"
+        jl_dir.mkdir(parents=True, exist_ok=True)
+        fname = f"{name}.json" if name else "default.json"
+        path = jl_dir / fname
+        with open(path, "w") as f:
+            json.dump(self._jumplist.to_dict(), f, indent=2)
+
+    def _load_jumplist_from_file(self, name: str = "") -> bool:
+        """Load a jumplist from disk. Returns True on success."""
+        import json
+        from sword_tui.jumplist import JumpList
+        jl_dir = Path.home() / ".config" / "sword-tui" / "jumplists"
+        fname = f"{name}.json" if name else "default.json"
+        path = jl_dir / fname
+        if not path.exists():
+            return False
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            self._jumplist = JumpList.from_dict(data)
+            return True
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return False
+
+    def _list_saved_jumplists(self) -> list[str]:
+        """List saved jumplist files."""
+        jl_dir = Path.home() / ".config" / "sword-tui" / "jumplists"
+        if not jl_dir.exists():
+            return []
+        return sorted(p.stem for p in jl_dir.glob("*.json"))
 
     # ==================== Helper Methods ====================
 
@@ -2423,7 +2559,25 @@ class SwordApp(App):
             self._in_visual_mode = False
             self.query_one("#status-bar", StatusBar).set_mode("normal")
 
+        self._apply_bookmark_colors()
         self._update_status()
+
+    def _apply_bookmark_colors(self) -> None:
+        """Apply bookmark colors to all active BibleView widgets."""
+        if not self._command_handler:
+            return
+        colors = self._command_handler.get_chapter_colors(
+            self._current_book, self._current_chapter
+        )
+        # Single view
+        view = self.query_one("#bible-view", BibleView)
+        view.set_bookmark_colors(colors)
+        # Parallel view left pane (same book/chapter)
+        if self._in_parallel_mode:
+            parallel = self.query_one("#parallel-view", ParallelView)
+            parallel.query_one("#left-view", BibleView).set_bookmark_colors(colors)
+            if self._panes_linked:
+                parallel.query_one("#right-view", BibleView).set_bookmark_colors(colors)
 
     def _load_active_pane_chapter(self) -> None:
         """Load chapter for only the active pane (when unlinked)."""
@@ -2600,6 +2754,147 @@ class SwordApp(App):
             self.action_toggle_jumplist()
         elif action == "export_jumplist":
             self._export_jumplist(result.data or {})
+        elif action == "save_jumplist":
+            data = result.data or {}
+            name = data.get("name", "")
+            self._save_jumplists(name)
+            label = name if name else "default"
+            self.query_one("#status-bar", StatusBar).show_message(
+                f"Jumplist opgeslagen: {label}"
+            )
+        elif action == "list_jumplists":
+            names = self._list_saved_jumplists()
+            if names:
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Jumplists: {', '.join(names)}"
+                )
+            else:
+                self.query_one("#status-bar", StatusBar).show_message(
+                    "Geen opgeslagen jumplists"
+                )
+        elif action == "load_jumplist":
+            data = result.data or {}
+            name = data.get("name", "")
+            if self._load_jumplist_from_file(name):
+                label = name if name else "default"
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Jumplist geladen: {label} ({len(self._jumplist.entries)} entries)"
+                )
+            else:
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Jumplist niet gevonden: {name or 'default'}"
+                )
+        elif action == "export_bookmarks":
+            self._export_bookmarks(result.data or {})
+        elif action == "refresh_bookmark_colors":
+            self._apply_bookmark_colors()
+            if result.message:
+                self.query_one("#status-bar", StatusBar).show_message(result.message)
+        elif action == "bookmark_add":
+            data = result.data or {}
+            tags = data.get("tags", [])
+            view = self._get_active_view()
+            verse = view.current_verse
+            from sword_tui.data.types import Bookmark
+            bookmark = Bookmark(
+                tags=tags,
+                book=self._current_book,
+                chapter=self._current_chapter,
+                verse=verse,
+                module=self._current_module,
+            )
+            self._command_handler._bookmarks.append(bookmark)
+            self._command_handler._save_bookmarks()
+            tag_str = ", ".join(tags) if tags else ""
+            self.query_one("#status-bar", StatusBar).show_message(
+                f"Bookmark [{tag_str}] toegevoegd: {bookmark.reference}"
+            )
+            self._apply_bookmark_colors()
+        elif action == "vl_new":
+            data = result.data or {}
+            name = data.get("name", "")
+            self._vl_manager.create(name)
+            self._active_verselist = name
+            self.query_one("#status-bar", StatusBar).show_message(
+                f"Verselist '{name}' aangemaakt (actief)"
+            )
+        elif action == "vl_add":
+            data = result.data or {}
+            name = data.get("name", "")
+            from sword_tui.data.types import VerseRef
+            view = self._get_active_view()
+            ref = VerseRef(
+                book=self._current_book,
+                chapter=self._current_chapter,
+                verse=view.current_verse,
+            )
+            if self._vl_manager.add_ref(name, ref):
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Vers {ref.reference} toegevoegd aan '{name}'"
+                )
+            else:
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Verselist '{name}' niet gevonden"
+                )
+        elif action == "vl_list":
+            lists = self._vl_manager.list_all()
+            if lists:
+                parts = [f"{vl.name} ({len(vl.refs)})" for vl in lists]
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Verselists: {', '.join(parts)}"
+                )
+            else:
+                self.query_one("#status-bar", StatusBar).show_message(
+                    "Geen verselists"
+                )
+        elif action == "vl_delete":
+            data = result.data or {}
+            name = data.get("name", "")
+            if self._vl_manager.delete(name):
+                if self._active_verselist == name:
+                    self._active_verselist = ""
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Verselist '{name}' verwijderd"
+                )
+            else:
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Verselist '{name}' niet gevonden"
+                )
+        elif action == "vl_load":
+            data = result.data or {}
+            name = data.get("name", "")
+            vl = self._vl_manager.get(name)
+            if vl:
+                self._active_verselist = name
+                self._toggle_verselist_view(vl)
+            else:
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Verselist '{name}' niet gevonden"
+                )
+        elif action == "vl_export":
+            self._export_verselist(result.data or {})
+        elif action == "jumps_to_verselist":
+            data = result.data or {}
+            name = data.get("name", "") or "jumplist"
+            entries = self._jumplist.entries
+            if not entries:
+                self.query_one("#status-bar", StatusBar).show_message(
+                    "Jumplist is leeg"
+                )
+            else:
+                from sword_tui.data.types import VerseRef
+                vl = self._vl_manager.create(name)
+                seen = set()
+                for e in entries:
+                    key = (e.book, e.chapter, e.verse)
+                    if key not in seen:
+                        seen.add(key)
+                        self._vl_manager.add_ref(name, VerseRef(
+                            book=e.book, chapter=e.chapter, verse=e.verse
+                        ))
+                self.query_one("#status-bar", StatusBar).show_message(
+                    f"Verselist '{name}' aangemaakt met {len(seen)} unieke verzen"
+                )
         elif result.message:
             self.query_one("#status-bar", StatusBar).show_message(result.message)
 
@@ -2696,3 +2991,146 @@ class SwordApp(App):
             )
         except OSError as exc:
             status.show_message(f"Fout bij schrijven: {exc}")
+
+    def _export_bookmarks(self, data: dict) -> None:
+        """Export bookmarks to a file.
+
+        Args:
+            data: Dict with keys:
+                - with_text: bool - include verse text
+                - module: str (optional) - SWORD module for text lookup
+                - path: str (optional) - output file path (default: bookmarks.txt)
+        """
+        status = self.query_one("#status-bar", StatusBar)
+        bookmarks = self._command_handler.get_bookmarks()
+
+        if not bookmarks:
+            status.show_message("Geen bookmarks om te exporteren")
+            return
+
+        with_text = data.get("with_text", False)
+        path = Path(data.get("path", "bookmarks.txt"))
+        module = data.get("module")
+
+        lines: list[str] = []
+        if with_text:
+            if module and module != self._current_module:
+                backend = DiathekeBackend(module)
+            else:
+                backend = self._backend
+            for bm in bookmarks:
+                ref = bm.reference
+                tags = ", ".join(bm.tags) if bm.tags else ""
+                if tags:
+                    lines.append(f"{ref} [{tags}]")
+                else:
+                    lines.append(ref)
+                if bm.verse:
+                    seg = backend.lookup_verse(bm.book, bm.chapter, bm.verse)
+                    if seg:
+                        lines.append(f"  {seg.text}")
+                    else:
+                        lines.append("  (tekst niet gevonden)")
+                else:
+                    lines.append("  (geen vers)")
+                lines.append("")
+        else:
+            for bm in bookmarks:
+                ref = bm.reference
+                tags = ", ".join(bm.tags) if bm.tags else ""
+                if tags:
+                    lines.append(f"{ref} [{tags}]")
+                else:
+                    lines.append(ref)
+
+        try:
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            status.show_message(
+                f"Bookmarks ({len(bookmarks)}) opgeslagen: {path}"
+            )
+        except OSError as exc:
+            status.show_message(f"Fout bij schrijven: {exc}")
+
+    def action_add_to_verselist(self) -> None:
+        """Add current verse to active verselist (V key)."""
+        status = self.query_one("#status-bar", StatusBar)
+        if not self._active_verselist:
+            status.show_message("Geen actieve verselist. Gebruik :vl new <naam> eerst")
+            return
+        from sword_tui.data.types import VerseRef
+        view = self._get_active_view()
+        ref = VerseRef(
+            book=self._current_book,
+            chapter=self._current_chapter,
+            verse=view.current_verse,
+        )
+        if self._vl_manager.add_ref(self._active_verselist, ref):
+            status.show_message(
+                f"{ref.reference} → '{self._active_verselist}'"
+            )
+        else:
+            status.show_message(
+                f"Verselist '{self._active_verselist}' niet gevonden"
+            )
+
+    def _export_verselist(self, data: dict) -> None:
+        """Export a verselist to a file."""
+        status = self.query_one("#status-bar", StatusBar)
+        name = data.get("name", "")
+        vl = self._vl_manager.get(name)
+        if not vl:
+            status.show_message(f"Verselist '{name}' niet gevonden")
+            return
+        if not vl.refs:
+            status.show_message(f"Verselist '{name}' is leeg")
+            return
+
+        with_text = data.get("with_text", False)
+        path = Path(data.get("path", f"{name}.txt"))
+
+        lines: list[str] = []
+        if with_text:
+            for ref in vl.refs:
+                lines.append(ref.reference)
+                seg = self._backend.lookup_verse(ref.book, ref.chapter, ref.verse)
+                if seg:
+                    lines.append(f"  {seg.text}")
+                else:
+                    lines.append("  (tekst niet gevonden)")
+                lines.append("")
+        else:
+            for ref in vl.refs:
+                lines.append(ref.reference)
+
+        try:
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            status.show_message(
+                f"Verselist '{name}' ({len(vl.refs)} verzen) opgeslagen: {path}"
+            )
+        except OSError as exc:
+            status.show_message(f"Fout bij schrijven: {exc}")
+
+    def _toggle_verselist_view(self, vl=None) -> None:
+        """Toggle verselist view mode."""
+        status = self.query_one("#status-bar", StatusBar)
+
+        if self._in_verselist_mode:
+            # Close verselist view
+            self._in_verselist_mode = False
+            self.query_one("#verselist-view").display = False
+            self.query_one("#bible-scroll").display = True
+            status.set_mode("normal")
+            status.show_message("Verselist gesloten")
+        else:
+            if not vl:
+                return
+            self._in_verselist_mode = True
+            self.query_one("#bible-scroll").display = False
+            self.query_one("#parallel-view").display = False
+            self.query_one("#search-view").display = False
+            self.query_one("#verselist-view").display = True
+            verselist_view = self.query_one("#verselist-view", VerseListView)
+            verselist_view.load_verselist(vl, self._backend)
+            status.show_message(
+                f"Verselist: {vl.name} | j/k nav | Enter ga naar | d verwijder | Esc sluiten"
+            )
