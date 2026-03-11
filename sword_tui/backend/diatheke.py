@@ -63,7 +63,7 @@ _VERSE_PATTERN = re.compile(
 _LEADING_VERSE = re.compile(r"^(?P<verse>\d+)[\.\:\s]+(?P<text>.*)$")
 
 # Search result pattern: "Book Chapter:Verse"
-_SEARCH_REF = re.compile(r"^([\w\s]+)\s+(\d+):(\d+)\s*$")
+_SEARCH_REF = re.compile(r"^([\w\s]+)\s+(\d+):(\d+)")
 
 # Pattern to extract Strong's word tags: <w savlm="strong:G1063 strong:G25">text</w>
 _STRONGS_WORD = re.compile(r'<w\s+savlm="([^"]+)"[^>]*>([^<]+)</w>')
@@ -161,6 +161,8 @@ class DiathekeBackend:
         fetch_snippets: bool = True,
     ) -> List[SearchHit]:
         """Search for text in the current module.
+
+        Note: diatheke phrase search is already case-insensitive.
 
         Args:
             query: Search query
